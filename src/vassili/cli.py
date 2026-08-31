@@ -18,16 +18,46 @@ app = typer.Typer(
 console = Console()
 
 
-@app.command()
+def generar_seccion_markdown(report: MutationReport) -> str:
+    """Genera sección de análisis de efectividad de tests y mutation testing para Dredd."""
+    lines = ["## Pruebas de Mutación y Calidad de Tests (Vassili)\n"]
+    lines.append(f"- **Archivo mutado:** `{Path(report.source_file).name}`")
+    lines.append(f"- **Mutantes generados:** {report.total_mutants}")
+    lines.append(f"- **Mutantes asesinados (Killed):** {report.killed_count}")
+    lines.append(f"- **Mutantes sobrevivientes (Survived):** {report.survived_count}")
+    lines.append(f"- **Mutation Score:** `{report.mutation_score}%`\n")
+    if report.passed:
+        lines.append("> [!TIP]\n> **Suite de Tests Efectiva:** La batería de pruebas detectó y eliminó los mutantes sintéticos satisfactoriamente.\n")
+    else:
+        lines.append("> [!WARNING]\n> **Tests Insuficientes:** Varios mutantes sobrevivieron a la suite de pruebas sin ser detectados.\n")
+        lines.append("| ID | Tipo | Línea | Mutación | Estado | Test que lo detectó |")
+        lines.append("| :---: | :---: | :---: | :--- | :---: | :--- |")
+        for m in report.mutants:
+            st = "✓ KILLED" if m.status == MutationStatus.KILLED else ("❌ SURVIVED" if m.status == MutationStatus.SURVIVED else "COMP_ERR")
+            lines.append(f"| {m.id} | `{m.mutation_type}` | {m.line_number} | `{m.original_snippet} -> {m.mutated_snippet}` | **{st}** | `{m.killing_test or '—'}` |")
+        lines.append("")
+    return "\n".join(lines)
+
+
+@app.command("mutate")
+@app.command("check")
 def mutate(
     source_file: Path = typer.Argument(..., help="Archivo C a mutar", exists=True),
-    tests_dir: Path = typer.Option(Path("tests"), "--tests-dir", "-t", help="Directorio con casos de prueba .in/.out", exists=True),
+    tests_dir: Path = typer.Option(Path("tests"), "--tests-dir", "-t", help="Directorio con casos de prueba .in/.out"),
     min_score: float = typer.Option(70.0, "--min-score", "-m", help="Score mínimo de mutación para aprobar (0-100%)"),
     timeout: float = typer.Option(2.0, "--timeout", help="Timeout máximo por test en segundos"),
-    json_output: bool = typer.Option(False, "--json", help="Emitir salida en formato JSON estructurado")
+    json_output: bool = typer.Option(False, "--json", help="Emitir salida en formato JSON estructurado"),
+    output_md: Optional[Path] = typer.Option(None, "--md", "--output-md", help="Generar sección de reporte en formato Markdown para fusión en Dredd."),
 ):
     """Genera mutantes sintéticos del código C y evalúa qué porcentaje es detectado por los tests."""
     report = run_mutation_analysis(source_file, tests_dir, timeout=timeout, min_score=min_score)
+
+    if output_md:
+        md_text = generar_seccion_markdown(report)
+        output_md.parent.mkdir(parents=True, exist_ok=True)
+        output_md.write_text(md_text, encoding="utf-8")
+        console.print(f"[bold green]✓ Sección Markdown generada en:[/bold green] {output_md}")
+        raise typer.Exit(code=0 if report.passed else 1)
 
     if json_output:
         print(json.dumps(report.model_dump(), indent=2, ensure_ascii=False))
@@ -73,6 +103,23 @@ def mutate(
 
     if not report.passed:
         raise typer.Exit(code=1)
+
+
+@app.command("report")
+def report_cmd(
+    source_file: Path = typer.Argument(..., help="Archivo C a mutar", exists=True),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Ruta de destino del archivo Markdown."),
+    tests_dir: Path = typer.Option(Path("tests"), "--tests-dir", "-t", help="Directorio con casos de prueba."),
+):
+    """Genera directamente la sección de reporte Markdown de VASSILI para Dredd."""
+    report = run_mutation_analysis(source_file, tests_dir)
+    md_content = generar_seccion_markdown(report)
+    if output:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(md_content, encoding="utf-8")
+        console.print(f"[bold green]✓ Reporte Markdown generado en:[/bold green] {output}")
+    else:
+        print(md_content)
 
 
 @app.command()

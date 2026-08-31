@@ -353,3 +353,12 @@ Podés encadenar `vassili` con otras herramientas del ecosistema en una única l
 vassili mutate src/tda.c --tests ./bin/test_tda --md reporte_mutantes.md
 ````
 
+---
+
+(manual-vassili-seccion-plugins)=
+## 9. Extensión, Desarrollo de Plugins y API Python
+
+Para crear tus propias reglas, conectores de evaluación o integrar `vassili` programáticamente en pipelines de CI/CD:
+
+- 👉 **Consultá la guía completa:** [Guía de Extensión y Creación de Plugins](plugins.md)
+

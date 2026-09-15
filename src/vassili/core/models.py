@@ -24,6 +24,7 @@ class Mutant(BaseModel):
 
 
 class MutationReport(BaseModel):
+    schema_version: str = "1.0.0"
     source_file: str
     total_mutants: int = 0
     killed_count: int = 0

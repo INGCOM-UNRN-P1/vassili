@@ -20,7 +20,10 @@ console = Console()
 
 def generar_seccion_markdown(report: MutationReport) -> str:
     """Genera sección de análisis de efectividad de tests y mutation testing para Dredd."""
-    lines = ["## Pruebas de Mutación y Calidad de Tests (Vassili)\n"]
+    lines = [
+        "<!-- dredd-section: vassili v1.0.0 -->\n",
+        "## Pruebas de Mutación y Calidad de Tests (Vassili)\n",
+    ]
     lines.append(f"- **Archivo mutado:** `{Path(report.source_file).name}`")
     lines.append(f"- **Mutantes generados:** {report.total_mutants}")
     lines.append(f"- **Mutantes asesinados (Killed):** {report.killed_count}")
@@ -34,7 +37,9 @@ def generar_seccion_markdown(report: MutationReport) -> str:
         lines.append("| :---: | :---: | :---: | :--- | :---: | :--- |")
         for m in report.mutants:
             st = "✓ KILLED" if m.status == MutationStatus.KILLED else ("❌ SURVIVED" if m.status == MutationStatus.SURVIVED else "COMP_ERR")
-            lines.append(f"| {m.id} | `{m.mutation_type}` | {m.line_number} | `{m.original_snippet} -> {m.mutated_snippet}` | **{st}** | `{m.killing_test or '—'}` |")
+            mut_str = f"{m.original_snippet} -> {m.mutated_snippet}".replace("|", "&#124;")
+            test_str = (m.killing_test or "—").replace("|", "&#124;")
+            lines.append(f"| {m.id} | `{m.mutation_type}` | {m.line_number} | `{mut_str}` | **{st}** | `{test_str}` |")
         lines.append("")
     return "\n".join(lines)
 

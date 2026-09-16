@@ -78,3 +78,16 @@ def test_ripley_plugin(tmp_path):
     plugin = VassiliPlugin()
     res = plugin.run({"source_dir": str(tmp_path)})
     assert res["passed"] is True
+
+
+def test_cli_doctor():
+    res = runner.invoke(app, ["doctor"])
+    assert res.exit_code == 0
+    assert "Diagnóstico del Entorno VASSILI" in res.output
+
+    res_json = runner.invoke(app, ["doctor", "--json"])
+    assert res_json.exit_code == 0
+    assert '"schema_version": "1.0.0"' in res_json.output
+    assert '"herramienta": "vassili"' in res_json.output
+    assert '"ok": true' in res_json.output
+

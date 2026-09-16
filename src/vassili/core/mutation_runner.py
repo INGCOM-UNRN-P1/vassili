@@ -3,9 +3,28 @@
 import tempfile
 import subprocess
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from vassili.core.models import MutationReport, MutationStatus, Mutant
 from vassili.core.mutator import generate_mutants_for_file
+
+
+def _compilar_con_daedalus(m_src: Path, m_bin: Path) -> Optional[bool]:
+    try:
+        from daedalus.core.compiler import compilar_archivos
+        res = compilar_archivos([m_src], binario_salida=m_bin, flags_adicionales=["-O0"])
+        return res.exito
+    except ImportError:
+        import sys
+        sibling = Path(__file__).resolve().parents[4] / "daedalus" / "src"
+        if sibling.is_dir() and str(sibling) not in sys.path:
+            sys.path.insert(0, str(sibling))
+            try:
+                from daedalus.core.compiler import compilar_archivos
+                res = compilar_archivos([m_src], binario_salida=m_bin, flags_adicionales=["-O0"])
+                return res.exito
+            except ImportError:
+                return None
+        return None
 
 
 def run_mutation_analysis(
@@ -41,17 +60,25 @@ def run_mutation_analysis(
             m_bin = tmp_path / f"mutant_{mutant.id}.bin"
             m_src.write_text(code, encoding="utf-8")
 
-            # 1. Compilar mutante
-            comp = subprocess.run(
-                ["gcc", "-O0", str(m_src), "-o", str(m_bin)],
-                capture_output=True,
-                check=False
-            )
-            if comp.returncode != 0:
-                mutant.status = MutationStatus.COMPILE_ERROR
-                comp_errors += 1
-                evaluated_mutants.append(mutant)
-                continue
+            # 1. Compilar mutante delegando en daedalus
+            daed_ok = _compilar_con_daedalus(m_src, m_bin)
+            if daed_ok is not None:
+                if not daed_ok:
+                    mutant.status = MutationStatus.COMPILE_ERROR
+                    comp_errors += 1
+                    evaluated_mutants.append(mutant)
+                    continue
+            else:
+                comp = subprocess.run(
+                    ["gcc", "-O0", str(m_src), "-o", str(m_bin)],
+                    capture_output=True,
+                    check=False
+                )
+                if comp.returncode != 0:
+                    mutant.status = MutationStatus.COMPILE_ERROR
+                    comp_errors += 1
+                    evaluated_mutants.append(mutant)
+                    continue
 
             # 2. Ejecutar contra testcases
             is_killed = False

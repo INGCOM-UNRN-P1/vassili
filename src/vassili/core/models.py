@@ -33,3 +33,8 @@ class MutationReport(BaseModel):
     mutation_score: float = 0.0  # (killed / (total - compile_error)) * 100
     mutants: List[Mutant] = Field(default_factory=list)
     passed: bool = True
+    # El mutation score solo significa algo si la suite aprueba sobre el
+    # programa original: si ya falla ahí, todo mutante "diverge" y el score
+    # sale 100 premiando justamente a la suite rota.
+    baseline_ok: bool = True
+    baseline_fallos: List[str] = Field(default_factory=list)

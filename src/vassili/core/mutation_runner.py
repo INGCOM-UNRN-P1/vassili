@@ -3,7 +3,7 @@
 import tempfile
 import subprocess
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from vassili.core.models import MutationReport, MutationStatus, Mutant
 from vassili.core.mutator import generate_mutants_for_file
 
@@ -27,6 +27,62 @@ def _compilar_con_daedalus(m_src: Path, m_bin: Path) -> Optional[bool]:
         return None
 
 
+def _compilar(fuente: Path, binario: Path) -> bool:
+    """Compila delegando en daedalus, con gcc como respaldo."""
+    daed_ok = _compilar_con_daedalus(fuente, binario)
+    if daed_ok is not None:
+        return daed_ok
+    comp = subprocess.run(
+        ["gcc", "-O0", str(fuente), "-o", str(binario)],
+        capture_output=True,
+        check=False,
+    )
+    return comp.returncode == 0
+
+
+def _casos_que_fallan(binario: Path, in_files: List[Path], timeout: float) -> List[str]:
+    """Devuelve los casos que el binario no supera."""
+    fallidos: List[str] = []
+    for in_f in in_files:
+        out_f = in_f.with_suffix(".out")
+        esperado = out_f.read_text(encoding="utf-8") if out_f.exists() else None
+        try:
+            res = subprocess.run(
+                [str(binario)],
+                input=in_f.read_text(encoding="utf-8"),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            fallidos.append(f"{in_f.name} (timeout)")
+            continue
+        if res.returncode != 0 or (esperado is not None and res.stdout.strip() != esperado.strip()):
+            fallidos.append(in_f.name)
+    return fallidos
+
+
+def verificar_baseline(
+    source_file: Path,
+    in_files: List[Path],
+    timeout: float,
+) -> Tuple[bool, List[str]]:
+    """Comprueba que la suite apruebe sobre el programa SIN mutar.
+
+    Es la precondición del análisis de mutación: si el original ya falla —por
+    ejemplo porque un `.out` tiene la salida equivocada— entonces cualquier
+    mutante también diverge, se lo cuenta como asesinado y el score da 100
+    sobre una suite que no sirve como oráculo.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        binario = Path(tmp_dir) / "original.bin"
+        if not _compilar(source_file, binario):
+            return False, ["el programa original no compila"]
+        fallidos = _casos_que_fallan(binario, in_files, timeout)
+    return (not fallidos), fallidos
+
+
 def run_mutation_analysis(
     source_file: Path,
     testcases_dir: Path,
@@ -47,6 +103,23 @@ def run_mutation_analysis(
         )
 
     in_files = sorted(testcases_dir.glob("*.in"))
+
+    baseline_ok, baseline_fallos = verificar_baseline(source_file, in_files, timeout)
+    if not baseline_ok:
+        # Sin oráculo válido no se informa score: cualquier número sería
+        # mérito de la suite rota, no de su capacidad de detectar mutantes.
+        return MutationReport(
+            source_file=str(source_file),
+            total_mutants=len(mutants_with_code),
+            killed_count=0,
+            survived_count=0,
+            mutation_score=0.0,
+            mutants=[],
+            passed=False,
+            baseline_ok=False,
+            baseline_fallos=baseline_fallos,
+        )
+
     evaluated_mutants: List[Mutant] = []
     killed = 0
     survived = 0
@@ -127,5 +200,6 @@ def run_mutation_analysis(
         compile_error_count=comp_errors,
         mutation_score=round(score, 2),
         mutants=evaluated_mutants,
-        passed=(score >= min_score)
+        passed=(score >= min_score),
+        baseline_ok=True,
     )

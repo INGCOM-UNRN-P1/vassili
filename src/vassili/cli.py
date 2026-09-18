@@ -18,6 +18,23 @@ app = typer.Typer(
 console = Console()
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        from vassili import __version__
+        console.print(f"[bold cyan]VASSILI[/bold cyan] versión [bold]{__version__}[/bold]")
+        raise typer.Exit(code=0)
+
+
+@app.callback()
+def main_callback(
+    version: Optional[bool] = typer.Option(
+        None, "--version", "-v", help="Muestra la versión y termina.",
+        callback=_version_callback, is_eager=True,
+    ),
+) -> None:
+    """Opciones globales."""
+
+
 def generar_seccion_markdown(report: MutationReport) -> str:
     """Genera sección de análisis de efectividad de tests y mutation testing para Dredd."""
     lines = [

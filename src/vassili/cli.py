@@ -98,11 +98,18 @@ def mutate(
     console.print(table)
 
     score_color = "green" if report.passed else "red"
+    if report.evaluable:
+        linea_score = (
+            f"[bold {score_color}]Mutation Score Final: {report.mutation_score}%[/bold {score_color}] "
+            f"(Mínimo requerido: {min_score}%)"
+        )
+    else:
+        linea_score = f"[bold yellow]Sin score: no evaluable.[/bold yellow] {report.motivo_no_evaluable}"
     console.print(Panel(
         f"[bold]Mutantes Totales:[/bold] {report.total_mutants}\n"
         f"[bold green]Mutantes Asesinados (Killed):[/bold green] {report.killed_count}\n"
         f"[bold red]Mutantes Sobrevivientes (Survived):[/bold red] {report.survived_count}\n"
-        f"[bold {score_color}]Mutation Score Final: {report.mutation_score}%[/bold {score_color}] (Mínimo requerido: {min_score}%)",
+        f"{linea_score}",
         title="[bold cyan]VASSILI Mutation Score[/bold cyan]"
     ))
 

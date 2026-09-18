@@ -38,3 +38,7 @@ class MutationReport(BaseModel):
     # sale 100 premiando justamente a la suite rota.
     baseline_ok: bool = True
     baseline_fallos: List[str] = Field(default_factory=list)
+    # `False` cuando no hubo ni un solo mutante válido sobre el cual medir: el
+    # score no significa nada y no debe presentarse como perfección.
+    evaluable: bool = True
+    motivo_no_evaluable: str = ""

@@ -92,14 +92,17 @@ def run_mutation_analysis(
     """Ejecuta todos los mutantes contra los testcases del directorio."""
     mutants_with_code = generate_mutants_for_file(source_file)
     if not mutants_with_code:
+        # Sin operadores que mutar no hay nada que medir: no se inventa un 100.
         return MutationReport(
             source_file=str(source_file),
             total_mutants=0,
             killed_count=0,
             survived_count=0,
-            mutation_score=100.0,
+            mutation_score=0.0,
             mutants=[],
-            passed=True
+            passed=True,
+            evaluable=False,
+            motivo_no_evaluable="El fuente no tiene operadores mutables (relacionales, aritméticos ni lógicos).",
         )
 
     in_files = sorted(testcases_dir.glob("*.in"))
@@ -190,7 +193,10 @@ def run_mutation_analysis(
             evaluated_mutants.append(mutant)
 
     valid_mutants = killed + survived
-    score = (killed / valid_mutants * 100.0) if valid_mutants > 0 else 100.0
+    # Con 0 mutantes válidos no hay sobre qué medir: el `100.0` de antes salía de
+    # dividir por nada y aprobaba un análisis que no evaluó ni un solo mutante.
+    evaluable = valid_mutants > 0
+    score = (killed / valid_mutants * 100.0) if evaluable else 0.0
 
     return MutationReport(
         source_file=str(source_file),
@@ -200,6 +206,11 @@ def run_mutation_analysis(
         compile_error_count=comp_errors,
         mutation_score=round(score, 2),
         mutants=evaluated_mutants,
-        passed=(score >= min_score),
+        passed=evaluable and (score >= min_score),
         baseline_ok=True,
+        evaluable=evaluable,
+        motivo_no_evaluable=(
+            "" if evaluable
+            else "Ninguno de los mutantes generados compiló, así que no hubo sobre qué medir la suite."
+        ),
     )

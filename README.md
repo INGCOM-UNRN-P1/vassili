@@ -8,7 +8,7 @@
 
 ### Qué cubre
 - Motor de Mutation Testing para código fuente C y evaluación de calidad de suites de pruebas.
-- Aplicación de operadores de mutación sintáctica sobre el AST (inversión de comparaciones condicionales, mutación de operadores aritméticos, reemplazo de literales y constantes).
+- Aplicación de operadores de mutación por **sustitución textual** línea a línea (no sobre un AST): inversión de comparaciones, mutación de operadores aritméticos y cambio de conectores lógicos. Antes de mutar se enmascaran comentarios y literales de cadena/carácter, así que un `+` dentro de un `"..."` no se toca. No muta literales numéricos ni constantes.
 - Ejecución de la suite de pruebas contra cada mutante generado.
 - Cálculo cuantitativo del Mutation Score (porcentaje de mutantes eliminados respecto al total) y reporte de mutantes supervivientes.
 
@@ -49,6 +49,6 @@ vassili mutate solucion_alumno.c --tests-dir tests/ --json
 
 ## 🔬 Operadores de Mutación
 
-- **`AOR`** (Arithmetic Operator Replacement): `+` ➔ `-`, `*` ➔ `/`.
-- **`ROR`** (Relational Operator Replacement): `==` ➔ `!=`, `<` ➔ `<=`, `>` ➔ `>=`.
-- **`LCR`** (Logical Connector Replacement): `&&` ➔ `||`.
+- **`AOR`** (Arithmetic Operator Replacement): `+` ➔ `-`, `-` ➔ `+`, `*` ➔ `/` (el `*` de puntero o desreferencia no se muta).
+- **`ROR`** (Relational Operator Replacement): `==` ➔ `!=`, `!=` ➔ `==`, `<` ➔ `<=`, `<=` ➔ `>`, `>` ➔ `>=`, `>=` ➔ `<`.
+- **`LCR`** (Logical Connector Replacement): `&&` ➔ `||` y `||` ➔ `&&`.

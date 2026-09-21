@@ -127,6 +127,7 @@ def run_mutation_analysis(
     killed = 0
     survived = 0
     comp_errors = 0
+    timeouts = 0
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir)
@@ -179,8 +180,12 @@ def run_mutation_analysis(
                         is_killed = True
                         break
                 except subprocess.TimeoutExpired:
-                    mutant.status = MutationStatus.KILLED
+                    # Un bucle infinito inducido por el mutante lo detecta la suite
+                    # (cuenta como asesinado en el score) pero se distingue del que
+                    # muere por salida distinta o crash.
+                    mutant.status = MutationStatus.TIMEOUT
                     mutant.killing_test = f"{in_f.name} (timeout)"
+                    timeouts += 1
                     is_killed = True
                     break
 
@@ -204,6 +209,7 @@ def run_mutation_analysis(
         killed_count=killed,
         survived_count=survived,
         compile_error_count=comp_errors,
+        timeout_count=timeouts,
         mutation_score=round(score, 2),
         mutants=evaluated_mutants,
         passed=evaluable and (score >= min_score),

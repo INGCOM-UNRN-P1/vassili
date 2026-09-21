@@ -53,7 +53,7 @@ def generar_seccion_markdown(report: MutationReport) -> str:
         lines.append("| ID | Tipo | Línea | Mutación | Estado | Test que lo detectó |")
         lines.append("| :---: | :---: | :---: | :--- | :---: | :--- |")
         for m in report.mutants:
-            st = "✓ KILLED" if m.status == MutationStatus.KILLED else ("❌ SURVIVED" if m.status == MutationStatus.SURVIVED else "COMP_ERR")
+            st = "✓ KILLED" if m.status == MutationStatus.KILLED else ("⏱ TIMEOUT" if m.status == MutationStatus.TIMEOUT else ("❌ SURVIVED" if m.status == MutationStatus.SURVIVED else "COMP_ERR"))
             mut_str = f"{m.original_snippet} -> {m.mutated_snippet}".replace("|", "&#124;")
             test_str = (m.killing_test or "—").replace("|", "&#124;")
             lines.append(f"| {m.id} | `{m.mutation_type}` | {m.line_number} | `{mut_str}` | **{st}** | `{test_str}` |")
@@ -98,6 +98,8 @@ def mutate(
     for m in report.mutants:
         if m.status == MutationStatus.KILLED:
             status_str = "[green]KILLED ✓[/green]"
+        elif m.status == MutationStatus.TIMEOUT:
+            status_str = "[green]TIMEOUT ⏱[/green]"
         elif m.status == MutationStatus.SURVIVED:
             status_str = "[red]SURVIVED ✗[/red]"
         else:

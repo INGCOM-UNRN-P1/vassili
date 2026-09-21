@@ -30,6 +30,7 @@ class MutationReport(BaseModel):
     killed_count: int = 0
     survived_count: int = 0
     compile_error_count: int = 0
+    timeout_count: int = 0  # mutantes asesinados por agotar el tiempo (incluidos en killed_count)
     mutation_score: float = 0.0  # (killed / (total - compile_error)) * 100
     mutants: List[Mutant] = Field(default_factory=list)
     passed: bool = True

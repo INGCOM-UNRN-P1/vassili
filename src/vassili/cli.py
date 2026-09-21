@@ -21,7 +21,7 @@ console = Console()
 def _version_callback(value: bool) -> None:
     if value:
         from vassili import __version__
-        console.print(f"[bold cyan]VASSILI[/bold cyan] versión [bold]{__version__}[/bold]")
+        typer.echo(f"VASSILI versión {__version__}")
         raise typer.Exit(code=0)
 
 

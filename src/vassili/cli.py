@@ -37,8 +37,9 @@ def main_callback(
 
 def generar_seccion_markdown(report: MutationReport) -> str:
     """Genera sección de análisis de efectividad de tests y mutation testing para Dredd."""
+    status = "ok" if report.passed else "fail"
     lines = [
-        "<!-- dredd-section: vassili v1.0.0 -->\n",
+        f"<!-- dredd-section: vassili, tool=vassili, version=1.0.0, status={status} -->\n",
         "## Pruebas de Mutación y Calidad de Tests (Vassili)\n",
     ]
     lines.append(f"- **Archivo mutado:** `{Path(report.source_file).name}`")

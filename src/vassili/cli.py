@@ -11,6 +11,7 @@ from vassili.core.models import MutationReport, MutationStatus
 from vassili.core.mutation_runner import run_mutation_analysis
 
 app = typer.Typer(
+    context_settings={"help_option_names": ["-h", "--help"]},
     name="vassili",
     help="Motor de Mutation Testing en C para evaluar la efectividad de los tests",
     add_completion=True

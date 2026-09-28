@@ -11,20 +11,10 @@ from vassili.core.mutator import generate_mutants_for_file
 def _compilar_con_daedalus(m_src: Path, m_bin: Path) -> Optional[bool]:
     try:
         from daedalus.core.compiler import compilar_archivos
-        res = compilar_archivos([m_src], binario_salida=m_bin, flags_adicionales=["-O0"])
-        return res.exito
     except ImportError:
-        import sys
-        sibling = Path(__file__).resolve().parents[4] / "daedalus" / "src"
-        if sibling.is_dir() and str(sibling) not in sys.path:
-            sys.path.insert(0, str(sibling))
-            try:
-                from daedalus.core.compiler import compilar_archivos
-                res = compilar_archivos([m_src], binario_salida=m_bin, flags_adicionales=["-O0"])
-                return res.exito
-            except ImportError:
-                return None
-        return None
+        return None  # sin el extra `ecosistema` se usa el camino propio
+    res = compilar_archivos([m_src], binario_salida=m_bin, flags_adicionales=["-O0"])
+    return res.exito
 
 
 def _compilar(fuente: Path, binario: Path) -> bool:

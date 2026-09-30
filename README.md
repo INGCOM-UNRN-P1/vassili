@@ -54,3 +54,32 @@ vassili mutate solucion_alumno.c --tests-dir tests/ --json
 - **`AOR`** (Arithmetic Operator Replacement): `+` ➔ `-`, `-` ➔ `+`, `*` ➔ `/` (el `*` de puntero o desreferencia no se muta).
 - **`ROR`** (Relational Operator Replacement): `==` ➔ `!=`, `!=` ➔ `==`, `<` ➔ `<=`, `<=` ➔ `>`, `>` ➔ `>=`, `>=` ➔ `<`.
 - **`LCR`** (Logical Connector Replacement): `&&` ➔ `||` y `||` ➔ `&&`.
+
+<!-- p1:referencia:inicio — generado por p1-tools/scripts/readme_generado.py: no editar a mano -->
+
+## Referencia rápida
+
+### Requisitos
+
+- Python ≥ 3.11 y [uv](https://docs.astral.sh/uv/getting-started/installation/).
+- Programas del sistema: `gcc`.
+
+| Sistema | `gcc` |
+|:--|:--|
+| Debian / Ubuntu | `sudo apt install gcc` |
+| Fedora | `sudo dnf install gcc` |
+| Windows | incluido en el entorno de la cátedra (MSYS2 UCRT64) |
+| macOS | `xcode-select --install` (clang como `gcc`) |
+
+### Comandos
+
+| Comando | Descripción |
+|:--|:--|
+| `vassili check`, `vassili mutate` | Genera mutantes sintéticos del código C y evalúa qué porcentaje es detectado por los tests. |
+| `vassili report` | Genera directamente la sección de reporte Markdown de VASSILI para Dredd. |
+| `vassili version` | Muestra la versión de VASSILI. |
+| `vassili doctor` | Verifica el estado del entorno de VASSILI (Python, GCC). |
+
+Ayuda de cada comando: `vassili <comando> -h`.
+
+<!-- p1:referencia:fin -->

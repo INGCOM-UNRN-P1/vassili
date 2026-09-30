@@ -4,36 +4,24 @@ import json
 from pathlib import Path
 from typing import Optional
 import typer
+from yutani.cli import crear_app
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
+from vassili import __version__
 from vassili.core.models import MutationReport, MutationStatus
 from vassili.core.mutation_runner import run_mutation_analysis
 
-app = typer.Typer(
-    context_settings={"help_option_names": ["-h", "--help"]},
-    name="vassili",
-    help="Motor de Mutation Testing en C para evaluar la efectividad de los tests",
-    add_completion=True
+# Contrato de línea de comandos del ecosistema (-h/--help, --version/-v, errores de datos como
+# mensajes) y textos de Typer en español, desde yutani (N-ECO-14).
+app = crear_app(
+    "vassili",
+    __version__,
+    "Motor de Mutation Testing en C para evaluar la efectividad de los tests",
+    add_completion=True,
+    no_args_is_help=False,
 )
 console = Console()
-
-
-def _version_callback(value: bool) -> None:
-    if value:
-        from vassili import __version__
-        typer.echo(f"VASSILI versión {__version__}")
-        raise typer.Exit(code=0)
-
-
-@app.callback()
-def main_callback(
-    version: Optional[bool] = typer.Option(
-        None, "--version", "-v", help="Muestra la versión y termina.",
-        callback=_version_callback, is_eager=True,
-    ),
-) -> None:
-    """Opciones globales."""
 
 
 def generar_seccion_markdown(report: MutationReport) -> str:
@@ -213,7 +201,6 @@ def doctor_cmd(
     if not todo_ok:
         console.print("\n[bold red]Instalá gcc (`sudo apt install gcc` o equivalente).[/bold red]")
         raise typer.Exit(code=1)
-
 
 
 if __name__ == "__main__":

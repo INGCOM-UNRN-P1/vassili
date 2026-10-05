@@ -35,17 +35,20 @@ def generar_seccion_markdown(report: MutationReport) -> str:
     lines.append(f"- **Mutantes generados:** {report.total_mutants}")
     lines.append(f"- **Mutantes asesinados (Killed):** {report.killed_count}")
     lines.append(f"- **Mutantes sobrevivientes (Survived):** {report.survived_count}")
+    if report.equivalent_count:
+        lines.append(f"- **Mutantes equivalentes (fuera del score):** {report.equivalent_count}")
     lines.append(f"- **Mutation Score:** `{report.mutation_score}%`\n")
     if report.passed:
         lines.append("> [!TIP]\n> **Suite de Tests Efectiva:** La batería de pruebas detectó y eliminó los mutantes sintéticos satisfactoriamente.\n")
     else:
         lines.append("> [!WARNING]\n> **Tests Insuficientes:** Varios mutantes sobrevivieron a la suite de pruebas sin ser detectados.\n")
-        lines.append("| ID | Tipo | Línea | Mutación | Estado | Test que lo detectó |")
+        lines.append("| ID | Tipo | Línea | Mutación | Estado | Test que lo detectó / qué caso falta |")
         lines.append("| :---: | :---: | :---: | :--- | :---: | :--- |")
         for m in report.mutants:
-            st = "✓ KILLED" if m.status == MutationStatus.KILLED else ("⏱ TIMEOUT" if m.status == MutationStatus.TIMEOUT else ("❌ SURVIVED" if m.status == MutationStatus.SURVIVED else "COMP_ERR"))
+            st = {MutationStatus.KILLED: "✓ KILLED", MutationStatus.TIMEOUT: "⏱ TIMEOUT", MutationStatus.SURVIVED: "❌ SURVIVED",
+                  MutationStatus.EQUIVALENT: "≡ EQUIVALENTE"}.get(m.status, "COMP_ERR")
             mut_str = f"{m.original_snippet} -> {m.mutated_snippet}".replace("|", "&#124;")
-            test_str = (m.killing_test or "—").replace("|", "&#124;")
+            test_str = (m.killing_test or m.sugerencia or "—").replace("|", "&#124;")
             lines.append(f"| {m.id} | `{m.mutation_type}` | {m.line_number} | `{mut_str}` | **{st}** | `{test_str}` |")
         lines.append("")
     return "\n".join(lines)
@@ -60,9 +63,10 @@ def mutate(
     timeout: float = typer.Option(2.0, "--timeout", help="Timeout máximo por test en segundos"),
     json_output: bool = typer.Option(False, "--json", help="Emitir salida en formato JSON estructurado"),
     output_md: Optional[Path] = typer.Option(None, "--md", "--output-md", help="Generar sección de reporte en formato Markdown para fusión en Dredd."),
+    sanitizers: bool = typer.Option(False, "--sanitizers", help="Compilar y correr con AddressSanitizer: suma los mutantes de reserva de menos (MSR) y sin free (FDR), que solo así se detectan."),
 ):
     """Genera mutantes sintéticos del código C y evalúa qué porcentaje es detectado por los tests."""
-    report = run_mutation_analysis(source_file, tests_dir, timeout=timeout, min_score=min_score)
+    report = run_mutation_analysis(source_file, tests_dir, timeout=timeout, min_score=min_score, sanitizers=sanitizers)
 
     if output_md:
         md_text = generar_seccion_markdown(report)
@@ -83,7 +87,7 @@ def mutate(
     table.add_column("Línea", style="dim", width=6)
     table.add_column("Mutación Aplicada", style="white")
     table.add_column("Estado", style="bold", width=12)
-    table.add_column("Test que lo Asesinó", style="blue")
+    table.add_column("Test que lo Asesinó / qué caso falta", style="blue")
 
     for m in report.mutants:
         if m.status == MutationStatus.KILLED:
@@ -92,6 +96,8 @@ def mutate(
             status_str = "[green]TIMEOUT ⏱[/green]"
         elif m.status == MutationStatus.SURVIVED:
             status_str = "[red]SURVIVED ✗[/red]"
+        elif m.status == MutationStatus.EQUIVALENT:
+            status_str = "[dim]EQUIVALENTE[/dim]"
         else:
             status_str = "[yellow]COMP_ERR[/yellow]"
 
@@ -101,7 +107,7 @@ def mutate(
             str(m.line_number),
             f"{m.original_snippet} ➔ {m.mutated_snippet}",
             status_str,
-            m.killing_test or "—"
+            m.killing_test or m.sugerencia or "—"
         )
 
     console.print(table)
@@ -118,6 +124,7 @@ def mutate(
         f"[bold]Mutantes Totales:[/bold] {report.total_mutants}\n"
         f"[bold green]Mutantes Asesinados (Killed):[/bold green] {report.killed_count}\n"
         f"[bold red]Mutantes Sobrevivientes (Survived):[/bold red] {report.survived_count}\n"
+        f"[dim]Equivalentes (fuera del score):[/dim] {report.equivalent_count}\n"
         f"{linea_score}",
         title="[bold cyan]VASSILI Mutation Score[/bold cyan]"
     ))

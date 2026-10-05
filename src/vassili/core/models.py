@@ -10,6 +10,9 @@ class MutationStatus(str, Enum):
     SURVIVED = "survived"
     COMPILE_ERROR = "compile_error"
     TIMEOUT = "timeout"
+    # El compilador genera exactamente el mismo código que para el original: ningún test puede
+    # matarlo, así que no entra en el score (QoL #1008).
+    EQUIVALENT = "equivalent"
 
 
 class Mutant(BaseModel):
@@ -18,9 +21,11 @@ class Mutant(BaseModel):
     line_number: int
     original_snippet: str
     mutated_snippet: str
-    mutation_type: str  # "AOR" (Arithmetic), "ROR" (Relational), "LCR" (Logical), "RVR" (Return)
+    mutation_type: str  # ROR, AOR, UOI, LCR, LNR, RVR, MSR, FDR (ver el README)
     status: MutationStatus = MutationStatus.SURVIVED
     killing_test: Optional[str] = None
+    # Para un mutante que sobrevivió: qué caso de prueba falta para matarlo (QoL #1009).
+    sugerencia: Optional[str] = None
 
 
 class MutationReport(BaseModel):
@@ -31,6 +36,8 @@ class MutationReport(BaseModel):
     survived_count: int = 0
     compile_error_count: int = 0
     timeout_count: int = 0  # mutantes asesinados por agotar el tiempo (incluidos en killed_count)
+    equivalent_count: int = 0  # mutantes equivalentes (mismo código objeto): fuera del score
+    sanitizers: bool = False  # mutantes y suite corridos con AddressSanitizer (detecta fugas y desbordes)
     mutation_score: float = 0.0  # (killed / (total - compile_error)) * 100
     mutants: List[Mutant] = Field(default_factory=list)
     passed: bool = True

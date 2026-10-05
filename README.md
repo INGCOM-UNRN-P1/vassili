@@ -10,7 +10,7 @@
 
 ### Qué cubre
 - Motor de Mutation Testing para código fuente C y evaluación de calidad de suites de pruebas.
-- Aplicación de operadores de mutación por **sustitución textual** línea a línea (no sobre un AST): inversión de comparaciones, mutación de operadores aritméticos y cambio de conectores lógicos. Antes de mutar se enmascaran comentarios y literales de cadena/carácter, así que un `+` dentro de un `"..."` no se toca. No muta literales numéricos ni constantes.
+- Aplicación de operadores de mutación por **sustitución textual** línea a línea (no sobre un AST): inversión de comparaciones, operadores aritméticos, incrementos, conectores y negaciones lógicas, retornos constantes y, con `--sanitizers`, reservas de memoria y liberaciones. Antes de mutar se enmascaran comentarios y literales de cadena/carácter, así que un `+` dentro de un `"..."` no se toca. No muta literales numéricos salvo los de un `return`.
 - Ejecución de la suite de pruebas contra cada mutante generado.
 - Cálculo cuantitativo del Mutation Score (porcentaje de mutantes eliminados respecto al total) y reporte de mutantes supervivientes.
 
@@ -54,6 +54,25 @@ vassili mutate solucion_alumno.c --tests-dir tests/ --json
 - **`AOR`** (Arithmetic Operator Replacement): `+` ➔ `-`, `-` ➔ `+`, `*` ➔ `/` (el `*` de puntero o desreferencia no se muta).
 - **`ROR`** (Relational Operator Replacement): `==` ➔ `!=`, `!=` ➔ `==`, `<` ➔ `<=`, `<=` ➔ `>`, `>` ➔ `>=`, `>=` ➔ `<`.
 - **`LCR`** (Logical Connector Replacement): `&&` ➔ `||` y `||` ➔ `&&`.
+- **`UOI`** (Unary Operator Increment): `++` ➔ `--` y `--` ➔ `++`; junto con `<` ➔ `<=` revela los errores de borde de los lazos.
+- **`LNR`** (Logical Negation Removal): `!condicion` ➔ `condicion`.
+- **`RVR`** (Return Value Replacement): `return 0;` ➔ `return 1;` y cualquier otra constante ➔ `return 0;` (no en `main`, donde solo cambiaría el código de salida).
+- **`MSR`** (Memory Size Reduction, solo con `--sanitizers`): `malloc(tam)` ➔ `malloc((tam) - 1)`.
+- **`FDR`** (Free Deletion, solo con `--sanitizers`): `free(p)` ➔ `(void)0`, una fuga.
+
+`MSR` y `FDR` solo se generan con `--sanitizers`, que compila y corre con AddressSanitizer: sin
+él ningún test puede detectar una reserva de menos o una fuga, y esos mutantes bajarían el score
+sin culpa de la suite.
+
+Además:
+
+- **Equivalentes:** si un mutante compila (con `-O2`) al mismo código objeto que el original,
+  ningún test puede distinguirlo; se marca `equivalent` y queda fuera del score.
+- **Aislamiento:** cada corrida es un proceso aparte con límite de tiempo, de CPU, de memoria
+  (512 MB) y de salida (8 MB): un mutante con un bucle infinito o que imprime sin parar no
+  cuelga el análisis.
+- **Qué caso falta:** de cada mutante que sobrevive se sugiere el caso de prueba que lo mataría
+  (en la tabla, el JSON —`sugerencia`— y la sección Markdown).
 
 <!-- p1:referencia:inicio — generado por p1-tools/scripts/readme_generado.py: no editar a mano -->
 

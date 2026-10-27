@@ -26,6 +26,9 @@ class Mutant(BaseModel):
     killing_test: Optional[str] = None
     # Con una suite de p1_test: la aserción que lo mató («prueba.c:42: ASSERT_INT_EQ(…)») o la señal.
     asercion: Optional[str] = None
+    # ECR: la función de biblioteca cuyo fallo verifica ese `if`, y la línea de la llamada.
+    funcion: Optional[str] = None
+    linea_llamada: Optional[int] = None
     # Para un mutante que sobrevivió: qué caso de prueba falta para matarlo (QoL #1009).
     sugerencia: Optional[str] = None
 
@@ -53,6 +56,7 @@ class MutationReport(BaseModel):
     timeout_count: int = 0  # mutantes asesinados por agotar el tiempo (incluidos en killed_count)
     equivalent_count: int = 0  # mutantes equivalentes (mismo código objeto): fuera del score
     sanitizers: bool = False  # mutantes y suite corridos con AddressSanitizer (detecta fugas y desbordes)
+    plan_vasquez: Optional[str] = None  # plan de fallos generado con los chequeos de error que sobrevivieron
     aislamiento: str = ""  # sandbox de cada corrida: nostromo (bwrap), nostromo sin bwrap o límites propios
     mutation_score: float = 0.0  # (killed / (total - compile_error)) * 100
     mutants: List[Mutant] = Field(default_factory=list)

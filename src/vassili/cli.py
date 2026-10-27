@@ -11,6 +11,7 @@ from rich.panel import Panel
 from vassili import __version__
 from vassili.core.models import MutationReport, MutationStatus
 from vassili.core.mutation_runner import resolver_suite, run_mutation_analysis
+from vassili.core.plan_vasquez import NOMBRE_POR_DEFECTO, chequeos_sin_probar, escribir_plan
 
 # Contrato de línea de comandos del ecosistema (-h/--help, --version/-v, errores de datos como
 # mensajes) y textos de Typer en español, desde yutani (N-ECO-14).
@@ -55,6 +56,9 @@ def generar_seccion_markdown(report: MutationReport) -> str:
         lines.append(f"- **Suite (p1_test):** `{Path(report.suite).name}`")
     if report.aislamiento:
         lines.append(f"- **Aislamiento de cada corrida:** {report.aislamiento}")
+    if report.plan_vasquez:
+        lines.append(f"- **Chequeos de error sin probar:** {len(chequeos_sin_probar(report))} "
+                     f"(plan de fallos para vasquez en `{Path(report.plan_vasquez).name}`)")
     lines.append(f"- **Mutation Score:** `{report.mutation_score}%`\n")
     if report.por_operador:
         lines.append("| Operador | Generados | Asesinados | Sobrevivientes | Equivalentes | Score |")
@@ -90,11 +94,19 @@ def mutate(
     suite: Optional[Path] = typer.Option(None, "--suite", "-s", exists=True, dir_okay=False, help="Suite de p1_test (prueba.c con su main) que se enlaza con el módulo mutado en lugar de los casos .in/.out; informa la aserción que mató a cada mutante."),
     incluir: List[Path] = typer.Option([], "--incluir", "-I", help="Directorio de headers para compilar con la suite (repetible). Sin -I ni --enlazar se usa el libs/p1_test de la plantilla."),
     enlazar: List[Path] = typer.Option([], "--enlazar", help="Fuente .c o biblioteca .a a enlazar con la suite (repetible), p. ej. libs/p1_test/libp1_test.a."),
+    plan_vasquez: Optional[Path] = typer.Option(None, "--plan-vasquez", help=f"Suma los mutantes ECR (sin el chequeo de error de malloc, realloc, fopen…) y escribe en esta ruta (o en <dir>/{NOMBRE_POR_DEFECTO}) el plan de fallos de vasquez para los que sobreviven."),
 ):
     """Genera mutantes sintéticos del código C y evalúa qué porcentaje es detectado por los tests."""
     suite_p1 = resolver_suite(suite, incluir, enlazar) if suite else None
     report = run_mutation_analysis(source_file, tests_dir, timeout=timeout, min_score=min_score, sanitizers=sanitizers,
-                                   suite=suite_p1)
+                                   suite=suite_p1, errores=plan_vasquez is not None)
+    if plan_vasquez is not None:
+        if escribir_plan(report, source_file, plan_vasquez):
+            if not json_output:
+                console.print(f"[bold green]✓ Plan de fallos para vasquez:[/bold green] {report.plan_vasquez} "
+                              f"({len(chequeos_sin_probar(report))} chequeos de error sin probar)")
+        elif not json_output:
+            console.print("[dim]Plan de vasquez: la suite prueba todos los chequeos de error (o no hay ninguno).[/dim]")
 
     if output_md:
         md_text = generar_seccion_markdown(report)

@@ -2,7 +2,7 @@
 
 import re
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Optional, Tuple, Union
 from vassili.core.masking import enmascarar_comentarios_y_literales
 from vassili.core.models import Mutant, MutationStatus
 
@@ -57,6 +57,35 @@ def _llamada_completa(linea: str, nombre: str) -> Optional[Tuple[int, int]]:
     return inicio.start(), args[1] + 1
 
 
+# Funciones de biblioteca cuyo fallo un programa de P1 tiene que contemplar (Ola 12): las que
+# vasquez sabe hacer fallar y que devuelven NULL al fallar.
+FUNCIONES_QUE_FALLAN = ("malloc", "calloc", "realloc", "strdup", "fopen")
+_VAR = r"[A-Za-z_]\w*(?:(?:->|\.)[A-Za-z_]\w*)*"
+_RE_ASIGNACION = re.compile(rf"(?P<var>{_VAR})\s*=\s*(?:\([^()]*\)\s*)?(?P<fn>{'|'.join(FUNCIONES_QUE_FALLAN)})\s*\(")
+_CHEQUEOS_DE_ERROR = [
+    re.compile(rf"\bif\s*\(\s*(?P<cond>(?P<var>{_VAR})\s*==\s*(?:NULL|0))\s*\)"),
+    re.compile(rf"\bif\s*\(\s*(?P<cond>(?:NULL|0)\s*==\s*(?P<var>{_VAR}))\s*\)"),
+    re.compile(rf"\bif\s*\(\s*(?P<cond>!\s*(?P<var>{_VAR}))\s*\)"),
+    # La llamada dentro de la condición: if ((f = fopen(ruta, "r")) == NULL)
+    re.compile(rf"\bif\s*\(\s*(?P<cond>\(\s*(?P<var>{_VAR})\s*=\s*(?P<fn>{'|'.join(FUNCIONES_QUE_FALLAN)})\s*\(.*\)\s*\)"
+               rf"\s*==\s*(?:NULL|0))\s*\)"),
+]
+
+
+def chequeo_de_error(linea: str) -> Optional[re.Match]:
+    """El `if` que verifica si un puntero es NULL (la condición queda en el grupo `cond`)."""
+    for patron in _CHEQUEOS_DE_ERROR:
+        m = patron.search(linea)
+        if m:
+            return m
+    return None
+
+
+def _condicion_de_error(linea: str) -> Optional[Tuple[int, int]]:
+    m = chequeo_de_error(linea)
+    return m.span("cond") if m else None
+
+
 # Operadores de mutación: (familia, patrón, reemplazo, símbolo). El patrón es una regex o una
 # función que devuelve la posición (inicio, fin) a reemplazar; el reemplazo, un texto o una función
 # del texto original de esa posición.
@@ -88,11 +117,17 @@ MUTATION_RULES: List[Tuple[str, Patron, Reemplazo, str]] = [
     ("MSR", lambda l: _argumentos_de(l, "malloc"), lambda a: f"({a}) - 1", "malloc"),
     # Sin free (QoL #1016): solo con --sanitizers, que es lo único que detecta la fuga
     ("FDR", lambda l: _llamada_completa(l, "free"), "(void)0", "free"),
+    # Sin el chequeo de error de malloc, realloc, fopen… (Ola 12): solo con `errores`; si el mutante
+    # sobrevive, la suite nunca recorre ese camino y la función va al plan de vasquez.
+    ("ECR", _condicion_de_error, lambda c: f"({c}) && 0", "if"),
 ]
 
 # Familias que solo una corrida con sanitizers puede matar: sin ellos son mutantes inmatables
 # que bajarían el score sin que la suite tenga la culpa.
 FAMILIAS_CON_SANITIZERS = {"MSR", "FDR"}
+# Familias que miden si la suite recorre los caminos de error, no su calidad sobre el camino normal:
+# con casos .in/.out ningún caso puede hacer fallar malloc, así que quedan fuera del score.
+FAMILIAS_DE_ERRORES = {"ECR"}
 
 _FUNCION_MAIN = re.compile(r"\bmain\s*\(")
 
@@ -104,7 +139,8 @@ def _buscar(patron: Patron, linea: str) -> Optional[Tuple[int, int]]:
     return (m.start(), m.end()) if m else None
 
 
-def generate_mutants_for_file(file_path: Path, sanitizers: bool = False) -> List[Tuple[Mutant, str]]:
+def generate_mutants_for_file(file_path: Path, sanitizers: bool = False,
+                              errores: bool = False) -> List[Tuple[Mutant, str]]:
     """Genera lista de mutantes y el código fuente C completo de cada mutante."""
     mutants_with_code: List[Tuple[Mutant, str]] = []
     content = file_path.read_text(encoding="utf-8", errors="replace")
@@ -118,6 +154,8 @@ def generate_mutants_for_file(file_path: Path, sanitizers: bool = False) -> List
 
     mutant_id = 1
     nivel = 0
+    # Variable → (función, línea) de la última asignación desde malloc, fopen… en la función actual.
+    asignaciones: Dict[str, Tuple[str, int]] = {}
     en_main = False
     dentro_de_main = False  # ya se abrió la llave de main (con estilo Allman va en la línea siguiente)
     for idx, line in enumerate(lines):
@@ -125,6 +163,8 @@ def generate_mutants_for_file(file_path: Path, sanitizers: bool = False) -> List
         linea_busqueda = lines_enmascaradas[idx] if idx < len(lines_enmascaradas) else line
         if nivel == 0 and _FUNCION_MAIN.search(linea_busqueda):
             en_main = True
+        for asignacion in _RE_ASIGNACION.finditer(linea_busqueda):
+            asignaciones[asignacion["var"]] = (asignacion["fn"], idx + 1)
         nivel += linea_busqueda.count("{") - linea_busqueda.count("}")
         if en_main and nivel > 0:
             dentro_de_main = True
@@ -137,6 +177,8 @@ def generate_mutants_for_file(file_path: Path, sanitizers: bool = False) -> List
                 break
             if m_type in FAMILIAS_CON_SANITIZERS and not sanitizers:
                 continue
+            if m_type in FAMILIAS_DE_ERRORES and not errores:
+                continue
             if m_type == "RVR" and en_main:
                 continue
             pos = _buscar(pattern, linea_busqueda)
@@ -146,6 +188,14 @@ def generate_mutants_for_file(file_path: Path, sanitizers: bool = False) -> List
                 pos = None
             if pos:
                 inicio, fin = pos
+                funcion: Optional[Tuple[str, int]] = None
+                if m_type == "ECR":
+                    chequeo = chequeo_de_error(linea_busqueda)
+                    assert chequeo is not None
+                    funcion = ((chequeo["fn"], idx + 1) if chequeo.groupdict().get("fn")
+                               else asignaciones.get(chequeo["var"]))
+                    if funcion is None:
+                        continue  # el puntero no viene de una función que pueda fallar
                 nuevo = replacement(line[inicio:fin]) if callable(replacement) else replacement
                 # Reemplazar primera ocurrencia en la línea
                 mutated_line = line[:inicio] + nuevo + line[fin:]
@@ -160,13 +210,17 @@ def generate_mutants_for_file(file_path: Path, sanitizers: bool = False) -> List
                     original_snippet=stripped,
                     mutated_snippet=mutated_line.strip(),
                     mutation_type=m_type,
-                    status=MutationStatus.SURVIVED
+                    status=MutationStatus.SURVIVED,
+                    funcion=funcion[0] if funcion else None,
+                    linea_llamada=funcion[1] if funcion else None,
                 )
                 mutants_with_code.append((m, mutated_code))
                 mutant_id += 1
 
         if dentro_de_main and nivel <= 0:
             en_main = dentro_de_main = False
+        if nivel <= 0:
+            asignaciones.clear()
         # El tope es GLOBAL por archivo. El `break` anterior solo salía del
         # bucle de reglas (12), no del de líneas, así que un archivo con 60
         # operadores generaba 60 mutantes pese al tope declarado de 50.

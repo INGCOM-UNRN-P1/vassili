@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Callable, Dict, Iterator, List, NamedTuple, Optional, Sequence, Tuple
 
 from vassili.core.models import MutationReport, MutationStatus, Mutant, ResumenOperador
-from vassili.core.mutator import generate_mutants_for_file
+from vassili.core.mutator import FAMILIAS_DE_ERRORES, generate_mutants_for_file
 
 # Con --sanitizers, mutantes y suite corren con AddressSanitizer: es lo único que detecta una
 # reserva de menos (MSR) o un free que falta (FDR). La fuga sale con código 23.
@@ -103,6 +103,8 @@ SUGERENCIAS: Dict[str, str] = {
     "RVR": "Verificá el valor que devuelve la función en un caso que llegue a ese return.",
     "MSR": "Agregá un caso que use toda la memoria reservada: con --sanitizers el desborde se detecta.",
     "FDR": "Agregá un caso que pase por esa liberación: con --sanitizers la fuga se detecta.",
+    "ECR": "Ningún caso hace fallar esa llamada: el camino de error no está probado. Probalo con el "
+           "plan de vasquez (--plan-vasquez) o con P1_FALLAR_EN en la suite de p1_test.",
 }
 
 
@@ -356,9 +358,10 @@ def run_mutation_analysis(
     min_score: float = 70.0,
     sanitizers: bool = False,
     suite: Optional[SuiteP1] = None,
+    errores: bool = False,
 ) -> MutationReport:
     """Ejecuta todos los mutantes contra los testcases del directorio, o contra una suite de p1_test."""
-    mutants_with_code = generate_mutants_for_file(source_file, sanitizers=sanitizers)
+    mutants_with_code = generate_mutants_for_file(source_file, sanitizers=sanitizers, errores=errores)
     aislamiento = aislamiento_disponible()
     if not mutants_with_code:
         # Sin operadores que mutar no hay nada que medir: no se inventa un 100.
@@ -432,16 +435,19 @@ def run_mutation_analysis(
 
             # 3. Ejecutar contra los casos o la suite
             veredicto = _primer_fallo(m_bin, in_files, suite, timeout, sanitizers)
+            # Los chequeos de error (ECR) se informan en por_operador y en el plan, fuera del score.
+            en_score = mutant.mutation_type not in FAMILIAS_DE_ERRORES
             if veredicto is not None:
                 mutant.status = MutationStatus.TIMEOUT if veredicto.timeout else MutationStatus.KILLED
                 mutant.killing_test = veredicto.caso
                 mutant.asercion = veredicto.asercion
-                timeouts += veredicto.timeout
-                killed += 1
+                if en_score:
+                    timeouts += veredicto.timeout
+                    killed += 1
             else:
                 mutant.status = MutationStatus.SURVIVED
                 mutant.sugerencia = SUGERENCIAS.get(mutant.mutation_type)
-                survived += 1
+                survived += en_score
 
             evaluated_mutants.append(mutant)
 

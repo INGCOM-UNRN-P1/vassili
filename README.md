@@ -51,6 +51,23 @@ vassili mutate solucion_alumno.c --tests-dir tests/ --json
 vassili mutate ejercicios/ejercicio1/fraccion.c --suite ejercicios/ejercicio1/prueba.c
 ```
 
+### Plan de fallos para vasquez
+
+Con `--plan-vasquez <ruta>` vassili suma los mutantes `ECR` y, con los que sobreviven (los
+chequeos de error que ningún caso ejercita), escribe un plan en el formato de `vasquez inject
+--plan`: un escenario por cada invocación de esa función (hasta 10; `fopen` con `ENOENT` y
+`EACCES`) y `fugas: true` para revisar también las fugas en esos caminos. Si la ruta es un
+directorio se escribe `vasquez.scenario.yaml`, que vasquez toma solo cuando está junto al primer
+fuente:
+
+```bash
+vassili mutate lista.c --tests-dir tests/ --plan-vasquez .
+vasquez inject main.c lista.c   # usa ./vasquez.scenario.yaml, junto a main.c
+```
+
+El número de invocación no se deduce del fuente: el plan cubre todas las de esa función, pero
+sólo de las funciones cuyo chequeo sobrevivió.
+
 ### Con una suite de p1_test
 
 Con `--suite prueba.c` el oráculo no son los `.in`/`.out` sino la suite de la plantilla: cada
@@ -74,6 +91,12 @@ cuántos mutantes de cada familia generó, mató y dejó vivos la suite.
 - **`RVR`** (Return Value Replacement): `return 0;` ➔ `return 1;` y cualquier otra constante ➔ `return 0;` (no en `main`, donde solo cambiaría el código de salida).
 - **`MSR`** (Memory Size Reduction, solo con `--sanitizers`): `malloc(tam)` ➔ `malloc((tam) - 1)`.
 - **`FDR`** (Free Deletion, solo con `--sanitizers`): `free(p)` ➔ `(void)0`, una fuga.
+
+- **`ECR`** (Error Check Removal, solo con `--plan-vasquez`): `if (p == NULL)`, `if (!p)` o
+  `if ((f = fopen(…)) == NULL)` ➔ `if ((…) && 0)`, cuando el puntero viene de `malloc`, `calloc`,
+  `realloc`, `strdup` o `fopen`. Mide si la suite recorre el camino de error, no su calidad sobre
+  el camino normal: queda **fuera del score** (está en `por_operador`). Los que sobreviven van al
+  plan de fallos de vasquez (ver abajo).
 
 `MSR` y `FDR` solo se generan con `--sanitizers`, que compila y corre con AddressSanitizer: sin
 él ningún test puede detectar una reserva de menos o una fuga, y esos mutantes bajarían el score

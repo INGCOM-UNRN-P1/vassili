@@ -2,11 +2,12 @@
 
 import math
 import os
+from contextlib import contextmanager
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, Iterator, List, NamedTuple, Optional, Sequence, Tuple
 
 from vassili.core.models import MutationReport, MutationStatus, Mutant
 from vassili.core.mutator import generate_mutants_for_file
@@ -18,9 +19,20 @@ _ENTORNO_SANITIZERS = {"ASAN_OPTIONS": "detect_leaks=1:exitcode=23"}
 
 # Cada corrida está aislada en su proceso con límites (QoL #1011): un mutante con un bucle
 # infinito se corta por tiempo, uno que reserva sin parar por memoria y uno que imprime sin
-# parar por tamaño de salida (va a un archivo, no a la memoria de vassili).
+# parar por tamaño de salida (va a un archivo, no a la memoria de vassili). Con nostromo (extra
+# `ecosistema`) corre además dentro de su sandbox (bwrap): sin red y sin escribir fuera de él,
+# así que un mutante que borra o pisa archivos no toca la máquina del evaluador (Ola 12).
 LIMITE_MEMORIA_MB = 512
 LIMITE_SALIDA_BYTES = 8 * 1024 * 1024
+
+AISLAMIENTO_PROPIO = "propio (límites POSIX)"
+
+
+class Ejecucion(NamedTuple):
+    retorno: int
+    stdout: str
+    stderr: str
+    aislamiento: str
 
 # Qué caso de prueba falta para matar un mutante que sobrevivió (QoL #1009).
 SUGERENCIAS: Dict[str, str] = {
@@ -75,29 +87,83 @@ def _limites(timeout: float, sanitizers: bool) -> Optional[Callable[[], None]]:
     return aplicar
 
 
-def _ejecutar(binario: Path, entrada: str, timeout: float, sanitizers: bool) -> Tuple[int, str]:
+@contextmanager
+def _entorno_sanitizers(sanitizers: bool) -> Iterator[None]:
+    """nostromo no recibe un entorno: hereda el de vassili, que se ajusta mientras dura la corrida."""
+    if not sanitizers:
+        yield
+        return
+    previo = {k: os.environ.get(k) for k in _ENTORNO_SANITIZERS}
+    os.environ.update(_ENTORNO_SANITIZERS)
+    try:
+        yield
+    finally:
+        for clave, valor in previo.items():
+            if valor is None:
+                os.environ.pop(clave, None)
+            else:
+                os.environ[clave] = valor
+
+
+def _ejecutar_en_nostromo(binario: Path, args: Sequence[str], entrada: str, timeout: float,
+                          sanitizers: bool) -> Optional[Ejecucion]:
+    try:
+        from nostromo.core.sandbox import ejecutar_aislado
+    except ImportError:
+        return None  # sin el extra `ecosistema` se usa el camino propio
+    with _entorno_sanitizers(sanitizers):
+        res = ejecutar_aislado(binario, args=list(args), stdin_texto=entrada, timeout_segundos=timeout,
+                               memoria_mb=LIMITE_MEMORIA_MB, archivo_mb=LIMITE_SALIDA_BYTES // (1024 * 1024))
+    if res.error_tipo == "TIMEOUT":
+        raise subprocess.TimeoutExpired([str(binario), *args], timeout)
+    aislamiento = "nostromo (bwrap)" if res.aislado else "nostromo (sólo límites, sin bwrap)"
+    return Ejecucion(res.codigo_retorno, res.stdout[:LIMITE_SALIDA_BYTES], res.stderr[:LIMITE_SALIDA_BYTES],
+                     aislamiento)
+
+
+def aislamiento_disponible() -> str:
+    """Con qué aislamiento van a correr los mutantes en esta máquina (va en el reporte)."""
+    try:
+        from nostromo.core.sandbox import bwrap_funciona
+    except ImportError:
+        return AISLAMIENTO_PROPIO
+    bwrap = shutil.which("bwrap")
+    if os.name == "posix" and bwrap and bwrap_funciona(bwrap):
+        return "nostromo (bwrap)"
+    return "nostromo (sólo límites, sin bwrap)"
+
+
+def _ejecutar(binario: Path, entrada: str, timeout: float, sanitizers: bool,
+              args: Sequence[str] = ()) -> Ejecucion:
     """Corre el binario aislado; `subprocess.TimeoutExpired` si no termina a tiempo."""
+    en_sandbox = _ejecutar_en_nostromo(binario, args, entrada, timeout, sanitizers)
+    if en_sandbox is not None:
+        return en_sandbox
     entorno = {**os.environ, **_ENTORNO_SANITIZERS} if sanitizers else None
-    with tempfile.TemporaryFile() as salida:
+    with tempfile.TemporaryFile() as salida, tempfile.TemporaryFile() as errores:
         proc = subprocess.run(
-            [str(binario)],
+            [str(binario), *args],
             input=entrada.encode("utf-8"),
             stdout=salida,
-            stderr=subprocess.DEVNULL,
+            stderr=errores,
             timeout=timeout,
             check=False,
             preexec_fn=_limites(timeout, sanitizers),  # noqa: PLW1509 — solo setrlimit, sin hilos
             env=entorno,
         )
         salida.seek(0)
-        return proc.returncode, salida.read(LIMITE_SALIDA_BYTES).decode("utf-8", errors="replace")
+        errores.seek(0)
+        return Ejecucion(proc.returncode,
+                         salida.read(LIMITE_SALIDA_BYTES).decode("utf-8", errors="replace"),
+                         errores.read(LIMITE_SALIDA_BYTES).decode("utf-8", errors="replace"),
+                         AISLAMIENTO_PROPIO)
 
 
 def _falla(binario: Path, in_f: Path, timeout: float, sanitizers: bool) -> bool:
     out_f = in_f.with_suffix(".out")
     esperado = out_f.read_text(encoding="utf-8") if out_f.exists() else None
-    ret, stdout = _ejecutar(binario, in_f.read_text(encoding="utf-8"), timeout, sanitizers)
-    return ret != 0 or (esperado is not None and stdout.strip() != esperado.strip())
+    corrida = _ejecutar(binario, in_f.read_text(encoding="utf-8"), timeout, sanitizers)
+    return corrida.retorno != 0 or (esperado is not None and corrida.stdout.strip() != esperado.strip())
 
 
 def _casos_que_fallan(binario: Path, in_files: List[Path], timeout: float, sanitizers: bool = False) -> List[str]:
@@ -157,6 +223,7 @@ def run_mutation_analysis(
 ) -> MutationReport:
     """Ejecuta todos los mutantes contra los testcases del directorio."""
     mutants_with_code = generate_mutants_for_file(source_file, sanitizers=sanitizers)
+    aislamiento = aislamiento_disponible()
     if not mutants_with_code:
         # Sin operadores que mutar no hay nada que medir: no se inventa un 100.
         return MutationReport(
@@ -170,6 +237,7 @@ def run_mutation_analysis(
             evaluable=False,
             motivo_no_evaluable="El fuente no tiene operadores mutables (relacionales, aritméticos ni lógicos).",
             sanitizers=sanitizers,
+            aislamiento=aislamiento,
         )
 
     in_files = sorted(testcases_dir.glob("*.in"))
@@ -189,6 +257,7 @@ def run_mutation_analysis(
             baseline_ok=False,
             baseline_fallos=baseline_fallos,
             sanitizers=sanitizers,
+            aislamiento=aislamiento,
         )
 
     evaluated_mutants: List[Mutant] = []
@@ -276,4 +345,5 @@ def run_mutation_analysis(
             else "Ninguno de los mutantes generados compiló, así que no hubo sobre qué medir la suite."
         ),
         sanitizers=sanitizers,
+        aislamiento=aislamiento,
     )

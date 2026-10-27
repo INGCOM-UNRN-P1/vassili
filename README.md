@@ -31,6 +31,7 @@
 
 ### Integración en el Ecosistema
 - CLI `vassili`. Plugin registrado en `ripley.plugins` (`mutation_testing`).
+- Extra `ecosistema`: `daedalus` compila los mutantes y `nostromo` los ejecuta aislados.
 
 ---
 
@@ -70,7 +71,9 @@ Además:
   ningún test puede distinguirlo; se marca `equivalent` y queda fuera del score.
 - **Aislamiento:** cada corrida es un proceso aparte con límite de tiempo, de CPU, de memoria
   (512 MB) y de salida (8 MB): un mutante con un bucle infinito o que imprime sin parar no
-  cuelga el análisis.
+  cuelga el análisis. Con el extra `ecosistema` corre además dentro del sandbox de `nostromo`
+  (bwrap: sin red y sin escribir fuera de él), así que un mutante que borra o pisa archivos no
+  toca la máquina del evaluador. El reporte dice cuál se usó (`aislamiento`).
 - **Qué caso falta:** de cada mutante que sobrevive se sugiere el caso de prueba que lo mataría
   (en la tabla, el JSON —`sugerencia`— y la sección Markdown).
 

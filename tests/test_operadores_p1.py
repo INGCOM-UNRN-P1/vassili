@@ -56,10 +56,10 @@ def test_la_salida_infinita_se_corta_sin_agotar_la_memoria(tmp_path):
 
     subprocess.run(["gcc", str(fuente), "-o", str(binario)], check=True)
     try:
-        ret, salida = _ejecutar(binario, "", 5.0, sanitizers=False)
+        corrida = _ejecutar(binario, "", 5.0, sanitizers=False)
     except subprocess.TimeoutExpired:
         pytest.fail("el límite de tamaño de salida tenía que cortarlo antes del timeout")
-    assert ret != 0 and len(salida) <= 8 * 1024 * 1024
+    assert corrida.retorno != 0 and len(corrida.stdout) <= 8 * 1024 * 1024
 
 
 @necesita_gcc

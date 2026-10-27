@@ -38,6 +38,7 @@ class MutationReport(BaseModel):
     timeout_count: int = 0  # mutantes asesinados por agotar el tiempo (incluidos en killed_count)
     equivalent_count: int = 0  # mutantes equivalentes (mismo código objeto): fuera del score
     sanitizers: bool = False  # mutantes y suite corridos con AddressSanitizer (detecta fugas y desbordes)
+    aislamiento: str = ""  # sandbox de cada corrida: nostromo (bwrap), nostromo sin bwrap o límites propios
     mutation_score: float = 0.0  # (killed / (total - compile_error)) * 100
     mutants: List[Mutant] = Field(default_factory=list)
     passed: bool = True

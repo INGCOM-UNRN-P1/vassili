@@ -37,6 +37,8 @@ def generar_seccion_markdown(report: MutationReport) -> str:
     lines.append(f"- **Mutantes sobrevivientes (Survived):** {report.survived_count}")
     if report.equivalent_count:
         lines.append(f"- **Mutantes equivalentes (fuera del score):** {report.equivalent_count}")
+    if report.aislamiento:
+        lines.append(f"- **Aislamiento de cada corrida:** {report.aislamiento}")
     lines.append(f"- **Mutation Score:** `{report.mutation_score}%`\n")
     if report.passed:
         lines.append("> [!TIP]\n> **Suite de Tests Efectiva:** La batería de pruebas detectó y eliminó los mutantes sintéticos satisfactoriamente.\n")
@@ -125,6 +127,7 @@ def mutate(
         f"[bold green]Mutantes Asesinados (Killed):[/bold green] {report.killed_count}\n"
         f"[bold red]Mutantes Sobrevivientes (Survived):[/bold red] {report.survived_count}\n"
         f"[dim]Equivalentes (fuera del score):[/dim] {report.equivalent_count}\n"
+        f"[dim]Aislamiento:[/dim] {report.aislamiento}\n"
         f"{linea_score}",
         title="[bold cyan]VASSILI Mutation Score[/bold cyan]"
     ))

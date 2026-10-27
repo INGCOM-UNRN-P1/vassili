@@ -131,6 +131,31 @@ FAMILIAS_DE_ERRORES = {"ECR"}
 
 _FUNCION_MAIN = re.compile(r"\bmain\s*\(")
 
+# Perfiles de operadores (QoL #1012–#1016). `catedra` deja los que más enseñan en P1, en este orden
+# de prioridad (el tope de mutantes se aplica después de ordenar): las cotas y el sentido de los
+# lazos, la memoria dinámica y las condiciones de los if; no muta negaciones sueltas ni retornos
+# constantes, ni aritmética fuera de la cabecera de un lazo.
+PERFILES = ("completo", "catedra")
+_RE_LAZO = re.compile(r"\b(?:for|while)\s*\(")
+_RE_CABECERA_FOR = re.compile(r"\bfor\s*\(")
+_RE_CONDICION = re.compile(r"\bif\s*\(|\?")
+_FAMILIAS_DE_MEMORIA = {"MSR", "FDR", "ECR"}
+
+
+def prioridad_catedra(familia: str, linea: str) -> Optional[int]:
+    """0 = cota o sentido de un lazo, 1 = memoria dinámica, 2 = condición; None = fuera del perfil."""
+    if familia in _FAMILIAS_DE_MEMORIA:
+        return 1
+    if familia in ("ROR", "LCR"):
+        if _RE_LAZO.search(linea):
+            return 0
+        return 2 if _RE_CONDICION.search(linea) else None
+    if familia == "UOI":
+        return 0 if _RE_CABECERA_FOR.search(linea) else None
+    if familia == "AOR":
+        return 0 if _RE_LAZO.search(linea) else None
+    return None
+
 
 def _buscar(patron: Patron, linea: str) -> Optional[Tuple[int, int]]:
     if callable(patron):
@@ -140,8 +165,13 @@ def _buscar(patron: Patron, linea: str) -> Optional[Tuple[int, int]]:
 
 
 def generate_mutants_for_file(file_path: Path, sanitizers: bool = False,
-                              errores: bool = False) -> List[Tuple[Mutant, str]]:
+                              errores: bool = False, perfil: str = "completo") -> List[Tuple[Mutant, str]]:
     """Genera lista de mutantes y el código fuente C completo de cada mutante."""
+    if perfil not in PERFILES:
+        raise ValueError(f"perfil desconocido: {perfil} (usá {' o '.join(PERFILES)})")
+    # Con `catedra` se generan todos los candidatos, se ordenan por prioridad y recién ahí se corta.
+    tope = MAX_MUTANTES if perfil == "completo" else MAX_MUTANTES * 20
+    prioridades: Dict[int, int] = {}
     mutants_with_code: List[Tuple[Mutant, str]] = []
     content = file_path.read_text(encoding="utf-8", errors="replace")
     lines = content.splitlines()
@@ -173,8 +203,11 @@ def generate_mutants_for_file(file_path: Path, sanitizers: bool = False,
             continue
 
         for m_type, pattern, replacement, symbol in MUTATION_RULES:
-            if mutant_id > MAX_MUTANTES:
+            if mutant_id > tope:
                 break
+            prioridad = prioridad_catedra(m_type, linea_busqueda) if perfil == "catedra" else 0
+            if prioridad is None:
+                continue
             if m_type in FAMILIAS_CON_SANITIZERS and not sanitizers:
                 continue
             if m_type in FAMILIAS_DE_ERRORES and not errores:
@@ -215,6 +248,7 @@ def generate_mutants_for_file(file_path: Path, sanitizers: bool = False,
                     linea_llamada=funcion[1] if funcion else None,
                 )
                 mutants_with_code.append((m, mutated_code))
+                prioridades[m.id] = prioridad
                 mutant_id += 1
 
         if dentro_de_main and nivel <= 0:
@@ -224,7 +258,12 @@ def generate_mutants_for_file(file_path: Path, sanitizers: bool = False,
         # El tope es GLOBAL por archivo. El `break` anterior solo salía del
         # bucle de reglas (12), no del de líneas, así que un archivo con 60
         # operadores generaba 60 mutantes pese al tope declarado de 50.
-        if mutant_id > MAX_MUTANTES:
+        if mutant_id > tope:
             break
 
+    if perfil == "catedra":
+        mutants_with_code.sort(key=lambda par: (prioridades[par[0].id], par[0].id))
+        mutants_with_code = mutants_with_code[:MAX_MUTANTES]
+        for nuevo_id, (m, _) in enumerate(mutants_with_code, 1):
+            m.id = nuevo_id
     return mutants_with_code

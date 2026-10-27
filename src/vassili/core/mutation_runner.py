@@ -359,9 +359,10 @@ def run_mutation_analysis(
     sanitizers: bool = False,
     suite: Optional[SuiteP1] = None,
     errores: bool = False,
+    perfil: str = "completo",
 ) -> MutationReport:
     """Ejecuta todos los mutantes contra los testcases del directorio, o contra una suite de p1_test."""
-    mutants_with_code = generate_mutants_for_file(source_file, sanitizers=sanitizers, errores=errores)
+    mutants_with_code = generate_mutants_for_file(source_file, sanitizers=sanitizers, errores=errores, perfil=perfil)
     aislamiento = aislamiento_disponible()
     if not mutants_with_code:
         # Sin operadores que mutar no hay nada que medir: no se inventa un 100.
@@ -460,6 +461,7 @@ def run_mutation_analysis(
     return MutationReport(
         source_file=str(source_file),
         suite=str(suite.prueba) if suite else None,
+        perfil=perfil,
         por_operador=resumir_por_operador(evaluated_mutants),
         total_mutants=len(evaluated_mutants),
         killed_count=killed,
@@ -468,7 +470,9 @@ def run_mutation_analysis(
         timeout_count=timeouts,
         equivalent_count=equivalentes,
         mutation_score=round(score, 2),
-        mutants=evaluated_mutants,
+        # El perfil de cátedra descarta del listado los equivalentes: quedan sólo contados.
+        mutants=[m for m in evaluated_mutants
+                 if perfil != "catedra" or m.status != MutationStatus.EQUIVALENT],
         passed=evaluable and (score >= min_score),
         baseline_ok=True,
         evaluable=evaluable,

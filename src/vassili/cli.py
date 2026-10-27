@@ -52,6 +52,8 @@ def generar_seccion_markdown(report: MutationReport) -> str:
     lines.append(f"- **Mutantes sobrevivientes (Survived):** {report.survived_count}")
     if report.equivalent_count:
         lines.append(f"- **Mutantes equivalentes (fuera del score):** {report.equivalent_count}")
+    if report.perfil != "completo":
+        lines.append(f"- **Perfil de operadores:** `{report.perfil}`")
     if report.suite:
         lines.append(f"- **Suite (p1_test):** `{Path(report.suite).name}`")
     if report.aislamiento:
@@ -94,12 +96,17 @@ def mutate(
     suite: Optional[Path] = typer.Option(None, "--suite", "-s", exists=True, dir_okay=False, help="Suite de p1_test (prueba.c con su main) que se enlaza con el módulo mutado en lugar de los casos .in/.out; informa la aserción que mató a cada mutante."),
     incluir: List[Path] = typer.Option([], "--incluir", "-I", help="Directorio de headers para compilar con la suite (repetible). Sin -I ni --enlazar se usa el libs/p1_test de la plantilla."),
     enlazar: List[Path] = typer.Option([], "--enlazar", help="Fuente .c o biblioteca .a a enlazar con la suite (repetible), p. ej. libs/p1_test/libp1_test.a."),
+    perfil: str = typer.Option("completo", "--perfil", help="Operadores: completo (todos) o catedra (cotas y sentido de los lazos, memoria dinámica y condiciones, en ese orden de prioridad; sin los equivalentes en el listado)."),
     plan_vasquez: Optional[Path] = typer.Option(None, "--plan-vasquez", help=f"Suma los mutantes ECR (sin el chequeo de error de malloc, realloc, fopen…) y escribe en esta ruta (o en <dir>/{NOMBRE_POR_DEFECTO}) el plan de fallos de vasquez para los que sobreviven."),
 ):
     """Genera mutantes sintéticos del código C y evalúa qué porcentaje es detectado por los tests."""
+    from vassili.core.mutator import PERFILES
+
+    if perfil not in PERFILES:
+        raise typer.BadParameter(f"usá {' o '.join(PERFILES)}", param_hint="--perfil")
     suite_p1 = resolver_suite(suite, incluir, enlazar) if suite else None
     report = run_mutation_analysis(source_file, tests_dir, timeout=timeout, min_score=min_score, sanitizers=sanitizers,
-                                   suite=suite_p1, errores=plan_vasquez is not None)
+                                   suite=suite_p1, errores=plan_vasquez is not None, perfil=perfil)
     if plan_vasquez is not None:
         if escribir_plan(report, source_file, plan_vasquez):
             if not json_output:

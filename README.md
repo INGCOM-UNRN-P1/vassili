@@ -51,6 +51,20 @@ vassili mutate solucion_alumno.c --tests-dir tests/ --json
 vassili mutate ejercicios/ejercicio1/fraccion.c --suite ejercicios/ejercicio1/prueba.c
 ```
 
+### Perfil de cátedra
+
+`--perfil catedra` deja los operadores que más enseñan en P1 y los ordena por prioridad antes
+de aplicar el tope de 50 mutantes:
+
+1. las cotas y el sentido de los lazos: `ROR`, `LCR` y `AOR` en la condición de un `for` o
+   `while`, y `UOI` en la cabecera de un `for`;
+2. la memoria dinámica: `MSR` y `FDR` (con `--sanitizers`) y `ECR` (con `--plan-vasquez`);
+3. las condiciones relacionales y lógicas de los `if` y del operador `?:`.
+
+No muta negaciones sueltas (`LNR`), retornos constantes (`RVR`) ni aritmética fuera de la
+cabecera de un lazo, y descarta del listado los mutantes equivalentes (siguen contados en
+`equivalent_count` y en `por_operador`). El perfil por omisión es `completo`.
+
 ### Plan de fallos para vasquez
 
 Con `--plan-vasquez <ruta>` vassili suma los mutantes `ECR` y, con los que sobreviven (los

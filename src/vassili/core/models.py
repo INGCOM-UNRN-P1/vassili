@@ -47,6 +47,7 @@ class MutationReport(BaseModel):
     schema_version: str = "1.1.0"
     source_file: str
     suite: Optional[str] = None  # la suite de p1_test, si se usó en lugar de casos .in/.out
+    perfil: str = "completo"  # operadores usados: completo o catedra (ver el README)
     # Por familia de operador: cuáles aniquila la suite y cuáles no (Ola 12).
     por_operador: Dict[str, ResumenOperador] = Field(default_factory=dict)
     total_mutants: int = 0

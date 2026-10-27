@@ -1,7 +1,7 @@
 """Modelos de datos para el motor de mutation testing en VASSILI."""
 
 from enum import Enum
-from typing import List, Optional
+from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -24,13 +24,28 @@ class Mutant(BaseModel):
     mutation_type: str  # ROR, AOR, UOI, LCR, LNR, RVR, MSR, FDR (ver el README)
     status: MutationStatus = MutationStatus.SURVIVED
     killing_test: Optional[str] = None
+    # Con una suite de p1_test: la aserción que lo mató («prueba.c:42: ASSERT_INT_EQ(…)») o la señal.
+    asercion: Optional[str] = None
     # Para un mutante que sobrevivió: qué caso de prueba falta para matarlo (QoL #1009).
     sugerencia: Optional[str] = None
 
 
+class ResumenOperador(BaseModel):
+    """Lo que la suite hizo con los mutantes de una familia (ROR, AOR…)."""
+    generados: int = 0
+    asesinados: int = 0  # incluye los que terminaron por timeout
+    sobrevivientes: int = 0
+    equivalentes: int = 0
+    no_compilan: int = 0
+    score: Optional[float] = None  # asesinados / (asesinados + sobrevivientes); None sin mutantes válidos
+
+
 class MutationReport(BaseModel):
-    schema_version: str = "1.0.0"
+    schema_version: str = "1.1.0"
     source_file: str
+    suite: Optional[str] = None  # la suite de p1_test, si se usó en lugar de casos .in/.out
+    # Por familia de operador: cuáles aniquila la suite y cuáles no (Ola 12).
+    por_operador: Dict[str, ResumenOperador] = Field(default_factory=dict)
     total_mutants: int = 0
     killed_count: int = 0
     survived_count: int = 0

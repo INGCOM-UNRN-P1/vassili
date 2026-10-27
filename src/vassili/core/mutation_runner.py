@@ -2,14 +2,16 @@
 
 import math
 import os
+import re
 from contextlib import contextmanager
+from dataclasses import dataclass
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Callable, Dict, Iterator, List, NamedTuple, Optional, Sequence, Tuple
 
-from vassili.core.models import MutationReport, MutationStatus, Mutant
+from vassili.core.models import MutationReport, MutationStatus, Mutant, ResumenOperador
 from vassili.core.mutator import generate_mutants_for_file
 
 # Con --sanitizers, mutantes y suite corren con AddressSanitizer: es lo único que detecta una
@@ -34,6 +36,62 @@ class Ejecucion(NamedTuple):
     stderr: str
     aislamiento: str
 
+
+@dataclass(frozen=True)
+class SuiteP1:
+    """Una suite de p1_test (`prueba.c` con su main) que se compila junto al módulo mutado.
+
+    En lugar de comparar la salida con `.out`, cada mutante se enlaza con la suite y se corre con
+    `-q -f`: p1_test deja en stderr la línea `P1_FALLO` de la aserción que lo mató (treadstone
+    41b344d) y se detiene en el primer test que falla (Ola 12, QoL #1269).
+    """
+    prueba: Path
+    incluir: Tuple[Path, ...] = ()
+    enlazar: Tuple[Path, ...] = ()
+
+
+ARGS_SUITE = ("-q", "-f")
+_RE_LINEA_P1 = re.compile(r"^P1_(FALLO|CRASH)\t([^\t]*)\t([^\t\r\n]*)(?:\t([^\r\n]*))?$", re.M)
+
+
+def _biblioteca_p1_test(desde: Path) -> Optional[Path]:
+    """`libs/p1_test` de la plantilla de TP, buscándolo hacia arriba desde la suite."""
+    for carpeta in [desde, *desde.parents][:5]:
+        candidata = carpeta / "libs" / "p1_test"
+        if (candidata / "p1_test.h").is_file() or (candidata / "include" / "p1_test.h").is_file():
+            return candidata
+    return None
+
+
+def resolver_suite(prueba: Path, incluir: Sequence[Path] = (), enlazar: Sequence[Path] = ()) -> SuiteP1:
+    """La suite con sus directorios de headers y lo que hay que enlazar.
+
+    Sin `incluir` ni `enlazar` se usa el `libs/p1_test` de la plantilla: sus headers y, para
+    enlazar, sus fuentes (`src/*.c`) o la biblioteca ya compilada (`libp1_test.a`)."""
+    prueba = Path(prueba).resolve()
+    incluir = tuple(Path(d).resolve() for d in incluir)
+    enlazar = tuple(Path(f).resolve() for f in enlazar)
+    if not incluir and not enlazar:
+        lib = _biblioteca_p1_test(prueba.parent)
+        if lib is not None:
+            incluir = tuple(d for d in (lib / "include", lib) if d.is_dir())
+            fuentes = sorted((lib / "src").glob("*.c"))
+            archivo = next((a for a in (lib / "libp1_test.a", lib / "build" / "libp1_test.a") if a.is_file()), None)
+            enlazar = tuple(fuentes) if fuentes else ((archivo,) if archivo else ())
+    return SuiteP1(prueba, incluir, enlazar)
+
+
+def asercion_de(stderr: str) -> Tuple[Optional[str], Optional[str]]:
+    """(test, aserción) de la primera línea P1_FALLO / P1_CRASH de una corrida de p1_test."""
+    m = _RE_LINEA_P1.search(stderr)
+    if not m:
+        return None, None
+    tipo, test, ubicacion, expresion = m.groups()
+    if tipo == "CRASH":
+        return test, ubicacion
+    return test, f"{ubicacion}: {expresion}" if expresion else ubicacion
+
+
 # Qué caso de prueba falta para matar un mutante que sobrevivió (QoL #1009).
 SUGERENCIAS: Dict[str, str] = {
     "ROR": "Agregá un caso en el borde de esa comparación: el valor justo igual, uno menos y uno más "
@@ -48,23 +106,30 @@ SUGERENCIAS: Dict[str, str] = {
 }
 
 
-def _compilar_con_daedalus(m_src: Path, m_bin: Path, flags: List[str]) -> Optional[bool]:
+def _compilar_con_daedalus(fuentes: List[Path], m_bin: Path, flags: List[str]) -> Optional[bool]:
     try:
         from daedalus.core.compiler import compilar_archivos
     except ImportError:
         return None  # sin el extra `ecosistema` se usa el camino propio
-    res = compilar_archivos([m_src], binario_salida=m_bin, flags_adicionales=flags)
+    res = compilar_archivos(fuentes, binario_salida=m_bin, flags_adicionales=flags)
     return res.exito
 
 
-def _compilar(fuente: Path, binario: Path, sanitizers: bool = False) -> bool:
-    """Compila delegando en daedalus, con gcc como respaldo."""
-    flags = ["-O0"] + (FLAGS_SANITIZERS if sanitizers else [])
-    daed_ok = _compilar_con_daedalus(fuente, binario, flags)
+def _flags_de_headers(original: Path, suite: Optional[SuiteP1]) -> List[str]:
+    """El mutante se escribe en un temporal: sus `#include "modulo.h"` se buscan junto al original."""
+    return [f"-I{original.resolve().parent}", *(f"-I{d}" for d in (suite.incluir if suite else ()))]
+
+
+def _compilar(fuente: Path, binario: Path, sanitizers: bool = False, suite: Optional[SuiteP1] = None,
+              original: Optional[Path] = None) -> bool:
+    """Compila delegando en daedalus, con gcc como respaldo; con una suite, enlazada a ella."""
+    flags = ["-O0"] + (FLAGS_SANITIZERS if sanitizers else []) + _flags_de_headers(original or fuente, suite)
+    fuentes = [fuente, *([suite.prueba, *suite.enlazar] if suite else [])]
+    daed_ok = _compilar_con_daedalus(fuentes, binario, flags)
     if daed_ok is not None:
         return daed_ok
     comp = subprocess.run(
-        ["gcc", *flags, str(fuente), "-o", str(binario)],
+        ["gcc", *flags, *map(str, fuentes), "-o", str(binario), "-lm"],
         capture_output=True,
         check=False,
     )
@@ -178,11 +243,56 @@ def _casos_que_fallan(binario: Path, in_files: List[Path], timeout: float, sanit
     return fallidos
 
 
+def _fallos_de_la_suite(binario: Path, timeout: float, sanitizers: bool) -> List[str]:
+    """Las aserciones que fallan sobre el original (sin -f, para listarlas todas)."""
+    try:
+        corrida = _ejecutar(binario, "", timeout, sanitizers, args=["-q"])
+    except subprocess.TimeoutExpired:
+        return ["la suite (timeout)"]
+    if corrida.retorno == 0:
+        return []
+    lineas = [f"{m[1]} ({m[2]}{': ' + m[3] if m[3] else ''})" for m in _RE_LINEA_P1.findall(corrida.stderr)]
+    return lineas or [f"la suite (código {corrida.retorno})"]
+
+
+class Veredicto(NamedTuple):
+    caso: str
+    asercion: Optional[str]
+    timeout: bool
+
+
+def _primer_fallo(binario: Path, in_files: List[Path], suite: Optional[SuiteP1], timeout: float,
+                  sanitizers: bool) -> Optional[Veredicto]:
+    """El caso (y con p1_test, la aserción) que mata al mutante, o None si sobrevive."""
+    if suite is not None:
+        try:
+            corrida = _ejecutar(binario, "", timeout, sanitizers, args=ARGS_SUITE)
+        except subprocess.TimeoutExpired:
+            return Veredicto("la suite (timeout)", None, True)
+        if corrida.retorno == 0:
+            return None
+        test, asercion = asercion_de(corrida.stderr)
+        if asercion:  # el compilador recibe rutas absolutas: se muestra relativa a la suite
+            asercion = asercion.replace(f"{suite.prueba.parent}{os.sep}", "")
+        return Veredicto(test or f"la suite (código {corrida.retorno})", asercion, False)
+    for in_f in in_files:
+        try:
+            # Si crasheó o si la salida no coincide con la esperada -> MUTANTE ASESINADO
+            if _falla(binario, in_f, timeout, sanitizers):
+                return Veredicto(in_f.name, None, False)
+        except subprocess.TimeoutExpired:
+            # Un bucle infinito inducido por el mutante lo detecta la suite (cuenta como
+            # asesinado en el score) pero se distingue del que muere por salida distinta o crash.
+            return Veredicto(f"{in_f.name} (timeout)", None, True)
+    return None
+
+
 def verificar_baseline(
     source_file: Path,
     in_files: List[Path],
     timeout: float,
     sanitizers: bool = False,
+    suite: Optional[SuiteP1] = None,
 ) -> Tuple[bool, List[str]]:
     """Comprueba que la suite apruebe sobre el programa SIN mutar.
 
@@ -193,15 +303,20 @@ def verificar_baseline(
     """
     with tempfile.TemporaryDirectory() as tmp_dir:
         binario = Path(tmp_dir) / "original.bin"
-        if not _compilar(source_file, binario, sanitizers):
+        if not _compilar(source_file, binario, sanitizers, suite):
             if sanitizers:
                 return False, ["el programa original no compila con sanitizers (¿falta libasan? corré sin --sanitizers)"]
+            if suite is not None:
+                return False, [f"el módulo original no compila junto a {suite.prueba.name} (¿falta p1_test? usá -I y --enlazar)"]
             return False, ["el programa original no compila"]
-        fallidos = _casos_que_fallan(binario, in_files, timeout, sanitizers)
+        if suite is not None:
+            fallidos = _fallos_de_la_suite(binario, timeout, sanitizers)
+        else:
+            fallidos = _casos_que_fallan(binario, in_files, timeout, sanitizers)
     return (not fallidos), fallidos
 
 
-def _codigo_objeto(codigo: str, directorio: Path) -> Optional[bytes]:
+def _codigo_objeto(codigo: str, directorio: Path, flags: Sequence[str] = ()) -> Optional[bytes]:
     """El `.o` optimizado de un fuente, compilado siempre como `prog.c` para que el nombre del
     archivo (que queda en el objeto) no haga distintos a dos fuentes equivalentes."""
     gcc = shutil.which("gcc")
@@ -209,9 +324,29 @@ def _codigo_objeto(codigo: str, directorio: Path) -> Optional[bytes]:
         return None
     directorio.mkdir(parents=True, exist_ok=True)
     (directorio / "prog.c").write_text(codigo, encoding="utf-8")
-    comp = subprocess.run([gcc, "-O2", "-c", "prog.c", "-o", "prog.o"], cwd=directorio,
+    comp = subprocess.run([gcc, "-O2", *flags, "-c", "prog.c", "-o", "prog.o"], cwd=directorio,
                           capture_output=True, check=False)
     return (directorio / "prog.o").read_bytes() if comp.returncode == 0 else None
+
+
+def resumir_por_operador(mutantes: List[Mutant]) -> Dict[str, ResumenOperador]:
+    """Cuántos mutantes de cada familia generó, mató y dejó vivos la suite, con su score."""
+    resumen: Dict[str, ResumenOperador] = {}
+    for m in mutantes:
+        r = resumen.setdefault(m.mutation_type, ResumenOperador())
+        r.generados += 1
+        if m.status in (MutationStatus.KILLED, MutationStatus.TIMEOUT):
+            r.asesinados += 1
+        elif m.status == MutationStatus.SURVIVED:
+            r.sobrevivientes += 1
+        elif m.status == MutationStatus.EQUIVALENT:
+            r.equivalentes += 1
+        else:
+            r.no_compilan += 1
+    for r in resumen.values():
+        validos = r.asesinados + r.sobrevivientes
+        r.score = round(r.asesinados / validos * 100.0, 2) if validos else None
+    return resumen
 
 
 def run_mutation_analysis(
@@ -220,8 +355,9 @@ def run_mutation_analysis(
     timeout: float = 2.0,
     min_score: float = 70.0,
     sanitizers: bool = False,
+    suite: Optional[SuiteP1] = None,
 ) -> MutationReport:
-    """Ejecuta todos los mutantes contra los testcases del directorio."""
+    """Ejecuta todos los mutantes contra los testcases del directorio, o contra una suite de p1_test."""
     mutants_with_code = generate_mutants_for_file(source_file, sanitizers=sanitizers)
     aislamiento = aislamiento_disponible()
     if not mutants_with_code:
@@ -240,9 +376,9 @@ def run_mutation_analysis(
             aislamiento=aislamiento,
         )
 
-    in_files = sorted(testcases_dir.glob("*.in"))
+    in_files = [] if suite is not None else sorted(testcases_dir.glob("*.in"))
 
-    baseline_ok, baseline_fallos = verificar_baseline(source_file, in_files, timeout, sanitizers)
+    baseline_ok, baseline_fallos = verificar_baseline(source_file, in_files, timeout, sanitizers, suite)
     if not baseline_ok:
         # Sin oráculo válido no se informa score: cualquier número sería
         # mérito de la suite rota, no de su capacidad de detectar mutantes.
@@ -269,8 +405,9 @@ def run_mutation_analysis(
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir)
+        flags_headers = _flags_de_headers(source_file, suite)
         objeto_original = _codigo_objeto(source_file.read_text(encoding="utf-8", errors="replace"),
-                                         tmp_path / "original")
+                                         tmp_path / "original", flags_headers)
 
         for mutant, code in mutants_with_code:
             m_src = tmp_path / f"mutant_{mutant.id}.c"
@@ -278,7 +415,7 @@ def run_mutation_analysis(
             m_src.write_text(code, encoding="utf-8")
 
             # 1. Compilar mutante delegando en daedalus
-            if not _compilar(m_src, m_bin, sanitizers):
+            if not _compilar(m_src, m_bin, sanitizers, suite, original=source_file):
                 mutant.status = MutationStatus.COMPILE_ERROR
                 comp_errors += 1
                 evaluated_mutants.append(mutant)
@@ -286,33 +423,20 @@ def run_mutation_analysis(
 
             # 2. Equivalencia trivial por compilador (QoL #1008): si el código optimizado es
             # idéntico al del original, ningún test puede distinguirlos.
-            if objeto_original is not None and _codigo_objeto(code, tmp_path / f"eq_{mutant.id}") == objeto_original:
+            if objeto_original is not None and _codigo_objeto(code, tmp_path / f"eq_{mutant.id}",
+                                                              flags_headers) == objeto_original:
                 mutant.status = MutationStatus.EQUIVALENT
                 equivalentes += 1
                 evaluated_mutants.append(mutant)
                 continue
 
-            # 3. Ejecutar contra testcases
-            is_killed = False
-            for in_f in in_files:
-                try:
-                    # Si crasheó o si la salida no coincide con la esperada -> MUTANTE ASESINADO
-                    if _falla(m_bin, in_f, timeout, sanitizers):
-                        mutant.status = MutationStatus.KILLED
-                        mutant.killing_test = in_f.name
-                        is_killed = True
-                        break
-                except subprocess.TimeoutExpired:
-                    # Un bucle infinito inducido por el mutante lo detecta la suite
-                    # (cuenta como asesinado en el score) pero se distingue del que
-                    # muere por salida distinta o crash.
-                    mutant.status = MutationStatus.TIMEOUT
-                    mutant.killing_test = f"{in_f.name} (timeout)"
-                    timeouts += 1
-                    is_killed = True
-                    break
-
-            if is_killed:
+            # 3. Ejecutar contra los casos o la suite
+            veredicto = _primer_fallo(m_bin, in_files, suite, timeout, sanitizers)
+            if veredicto is not None:
+                mutant.status = MutationStatus.TIMEOUT if veredicto.timeout else MutationStatus.KILLED
+                mutant.killing_test = veredicto.caso
+                mutant.asercion = veredicto.asercion
+                timeouts += veredicto.timeout
                 killed += 1
             else:
                 mutant.status = MutationStatus.SURVIVED
@@ -329,6 +453,8 @@ def run_mutation_analysis(
 
     return MutationReport(
         source_file=str(source_file),
+        suite=str(suite.prueba) if suite else None,
+        por_operador=resumir_por_operador(evaluated_mutants),
         total_mutants=len(evaluated_mutants),
         killed_count=killed,
         survived_count=survived,

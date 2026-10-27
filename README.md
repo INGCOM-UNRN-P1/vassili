@@ -46,7 +46,21 @@ vassili mutate solucion_alumno.c --tests-dir tests/ --min-score 80
 
 # Salida estructurada JSON
 vassili mutate solucion_alumno.c --tests-dir tests/ --json
+
+# Un módulo de TP (sin main) contra su suite de p1_test
+vassili mutate ejercicios/ejercicio1/fraccion.c --suite ejercicios/ejercicio1/prueba.c
 ```
+
+### Con una suite de p1_test
+
+Con `--suite prueba.c` el oráculo no son los `.in`/`.out` sino la suite de la plantilla: cada
+mutante del módulo se enlaza con `prueba.c` y se corre con `-q -f`. p1_test (treadstone ≥
+`41b344d`) deja en stderr una línea `P1_FALLO` por la aserción que falló, así que de cada mutante
+asesinado se informa el test y la aserción (`prueba.c:42: ASSERT_INT_EQ(…)`, o la señal si se
+cayó); con `-f` la suite se detiene en el primer test que falla. Los headers y la biblioteca se
+toman del `libs/p1_test` de la plantilla (sus fuentes o `libp1_test.a`); si no está, se indican
+con `-I` y `--enlazar`. El reporte trae además el resumen por operador (`por_operador`):
+cuántos mutantes de cada familia generó, mató y dejó vivos la suite.
 
 ---
 

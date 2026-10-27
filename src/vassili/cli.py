@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 import typer
 from yutani.cli import crear_app
 from rich.console import Console
@@ -10,7 +10,7 @@ from rich.table import Table
 from rich.panel import Panel
 from vassili import __version__
 from vassili.core.models import MutationReport, MutationStatus
-from vassili.core.mutation_runner import run_mutation_analysis
+from vassili.core.mutation_runner import resolver_suite, run_mutation_analysis
 
 # Contrato de línea de comandos del ecosistema (-h/--help, --version/-v, errores de datos como
 # mensajes) y textos de Typer en español, desde yutani (N-ECO-14).
@@ -22,6 +22,20 @@ app = crear_app(
     no_args_is_help=False,
 )
 console = Console()
+
+
+def _filas_por_operador(report: MutationReport) -> List[List[str]]:
+    filas = []
+    for familia, r in sorted(report.por_operador.items()):
+        score = "—" if r.score is None else f"{r.score}%"
+        filas.append([familia, str(r.generados), str(r.asesinados), str(r.sobrevivientes), str(r.equivalentes), score])
+    return filas
+
+
+def _quien_lo_mato(m) -> str:
+    if m.killing_test and m.asercion:
+        return f"{m.killing_test} ({m.asercion})"
+    return m.killing_test or m.sugerencia or "—"
 
 
 def generar_seccion_markdown(report: MutationReport) -> str:
@@ -37,9 +51,16 @@ def generar_seccion_markdown(report: MutationReport) -> str:
     lines.append(f"- **Mutantes sobrevivientes (Survived):** {report.survived_count}")
     if report.equivalent_count:
         lines.append(f"- **Mutantes equivalentes (fuera del score):** {report.equivalent_count}")
+    if report.suite:
+        lines.append(f"- **Suite (p1_test):** `{Path(report.suite).name}`")
     if report.aislamiento:
         lines.append(f"- **Aislamiento de cada corrida:** {report.aislamiento}")
     lines.append(f"- **Mutation Score:** `{report.mutation_score}%`\n")
+    if report.por_operador:
+        lines.append("| Operador | Generados | Asesinados | Sobrevivientes | Equivalentes | Score |")
+        lines.append("| :---: | :---: | :---: | :---: | :---: | :---: |")
+        lines.extend("| `" + f[0] + "` | " + " | ".join(f[1:]) + " |" for f in _filas_por_operador(report))
+        lines.append("")
     if report.passed:
         lines.append("> [!TIP]\n> **Suite de Tests Efectiva:** La batería de pruebas detectó y eliminó los mutantes sintéticos satisfactoriamente.\n")
     else:
@@ -50,7 +71,7 @@ def generar_seccion_markdown(report: MutationReport) -> str:
             st = {MutationStatus.KILLED: "✓ KILLED", MutationStatus.TIMEOUT: "⏱ TIMEOUT", MutationStatus.SURVIVED: "❌ SURVIVED",
                   MutationStatus.EQUIVALENT: "≡ EQUIVALENTE"}.get(m.status, "COMP_ERR")
             mut_str = f"{m.original_snippet} -> {m.mutated_snippet}".replace("|", "&#124;")
-            test_str = (m.killing_test or m.sugerencia or "—").replace("|", "&#124;")
+            test_str = _quien_lo_mato(m).replace("|", "&#124;")
             lines.append(f"| {m.id} | `{m.mutation_type}` | {m.line_number} | `{mut_str}` | **{st}** | `{test_str}` |")
         lines.append("")
     return "\n".join(lines)
@@ -66,9 +87,14 @@ def mutate(
     json_output: bool = typer.Option(False, "--json", help="Emitir salida en formato JSON estructurado"),
     output_md: Optional[Path] = typer.Option(None, "--md", "--output-md", help="Generar sección de reporte en formato Markdown para fusión en Dredd."),
     sanitizers: bool = typer.Option(False, "--sanitizers", help="Compilar y correr con AddressSanitizer: suma los mutantes de reserva de menos (MSR) y sin free (FDR), que solo así se detectan."),
+    suite: Optional[Path] = typer.Option(None, "--suite", "-s", exists=True, dir_okay=False, help="Suite de p1_test (prueba.c con su main) que se enlaza con el módulo mutado en lugar de los casos .in/.out; informa la aserción que mató a cada mutante."),
+    incluir: List[Path] = typer.Option([], "--incluir", "-I", help="Directorio de headers para compilar con la suite (repetible). Sin -I ni --enlazar se usa el libs/p1_test de la plantilla."),
+    enlazar: List[Path] = typer.Option([], "--enlazar", help="Fuente .c o biblioteca .a a enlazar con la suite (repetible), p. ej. libs/p1_test/libp1_test.a."),
 ):
     """Genera mutantes sintéticos del código C y evalúa qué porcentaje es detectado por los tests."""
-    report = run_mutation_analysis(source_file, tests_dir, timeout=timeout, min_score=min_score, sanitizers=sanitizers)
+    suite_p1 = resolver_suite(suite, incluir, enlazar) if suite else None
+    report = run_mutation_analysis(source_file, tests_dir, timeout=timeout, min_score=min_score, sanitizers=sanitizers,
+                                   suite=suite_p1)
 
     if output_md:
         md_text = generar_seccion_markdown(report)
@@ -109,10 +135,18 @@ def mutate(
             str(m.line_number),
             f"{m.original_snippet} ➔ {m.mutated_snippet}",
             status_str,
-            m.killing_test or m.sugerencia or "—"
+            _quien_lo_mato(m)
         )
 
     console.print(table)
+
+    if report.por_operador:
+        por_op = Table(title="Por operador", show_header=True, header_style="bold magenta")
+        for col in ("Operador", "Generados", "Asesinados", "Sobrevivientes", "Equivalentes", "Score"):
+            por_op.add_column(col)
+        for fila in _filas_por_operador(report):
+            por_op.add_row(*fila)
+        console.print(por_op)
 
     score_color = "green" if report.passed else "red"
     if report.evaluable:

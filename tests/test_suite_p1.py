@@ -107,3 +107,13 @@ def test_la_suite_que_falla_sobre_el_original_no_da_score(ejercicio):
     rep = run_mutation_analysis(ejercicio / "suma.c", ejercicio, suite=SuiteP1(prueba=ejercicio / "prueba.c"))
     assert not rep.baseline_ok
     assert rep.baseline_fallos and rep.baseline_fallos[0].startswith("test_suma (")
+
+
+def test_como_termino_nombra_la_senal_que_p1_test_no_captura():
+    from vassili.core.mutation_runner import AISLAMIENTO_PROPIO, Ejecucion, _como_termino
+
+    assert _como_termino(Ejecucion(134, "", "", "nostromo (bwrap)")) == "la suite (SIGABRT)"
+    assert _como_termino(Ejecucion(-6, "", "", AISLAMIENTO_PROPIO)) == "la suite (SIGABRT)"
+    # Sin bwrap un exit(134) es un código, no una señal.
+    assert _como_termino(Ejecucion(134, "", "", AISLAMIENTO_PROPIO)) == "la suite (código 134)"
+    assert _como_termino(Ejecucion(1, "", "", "nostromo (bwrap)")) == "la suite (código 1)"

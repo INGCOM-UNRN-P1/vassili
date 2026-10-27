@@ -254,7 +254,23 @@ def _fallos_de_la_suite(binario: Path, timeout: float, sanitizers: bool) -> List
     if corrida.retorno == 0:
         return []
     lineas = [f"{m[1]} ({m[2]}{': ' + m[3] if m[3] else ''})" for m in _RE_LINEA_P1.findall(corrida.stderr)]
-    return lineas or [f"la suite (código {corrida.retorno})"]
+    return lineas or [_como_termino(corrida)]
+
+
+def _como_termino(corrida: Ejecucion) -> str:
+    """«la suite (SIGABRT)» si la mató una señal que p1_test no captura (abort de un assert, double
+    free…), «la suite (código N)» si salió con un código. Bajo bwrap la señal llega como 128+N."""
+    senal = -corrida.retorno if corrida.retorno < 0 else None
+    if corrida.aislamiento == "nostromo (bwrap)" and 128 < corrida.retorno < 160:
+        senal = corrida.retorno - 128
+    if senal is not None:
+        import signal
+
+        try:
+            return f"la suite ({signal.Signals(senal).name})"
+        except ValueError:
+            return f"la suite (señal {senal})"
+    return f"la suite (código {corrida.retorno})"
 
 
 class Veredicto(NamedTuple):
@@ -276,7 +292,7 @@ def _primer_fallo(binario: Path, in_files: List[Path], suite: Optional[SuiteP1],
         test, asercion = asercion_de(corrida.stderr)
         if asercion:  # el compilador recibe rutas absolutas: se muestra relativa a la suite
             asercion = asercion.replace(f"{suite.prueba.parent}{os.sep}", "")
-        return Veredicto(test or f"la suite (código {corrida.retorno})", asercion, False)
+        return Veredicto(test or _como_termino(corrida), asercion, False)
     for in_f in in_files:
         try:
             # Si crasheó o si la salida no coincide con la esperada -> MUTANTE ASESINADO

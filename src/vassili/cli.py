@@ -89,7 +89,7 @@ def mutate(
     source_file: Path = typer.Argument(..., help="Archivo C a mutar", exists=True),
     tests_dir: Path = typer.Option(Path("tests"), "--tests-dir", "-t", help="Directorio con casos de prueba .in/.out"),
     min_score: float = typer.Option(70.0, "--min-score", "-m", help="Score mínimo de mutación para aprobar (0-100%)"),
-    timeout: float = typer.Option(2.0, "--timeout", help="Timeout máximo por test en segundos"),
+    timeout: float = typer.Option(2.0, "--timeout", help="Tiempo límite por prueba en segundos"),
     json_output: bool = typer.Option(False, "--json", help="Emitir salida en formato JSON estructurado"),
     output_md: Optional[Path] = typer.Option(None, "--md", "--output-md", help="Generar sección de reporte en formato Markdown para fusión en Dredd."),
     sanitizers: bool = typer.Option(False, "--sanitizers", help="Compilar y correr con AddressSanitizer: suma los mutantes de reserva de menos (MSR) y sin free (FDR), que solo así se detectan."),

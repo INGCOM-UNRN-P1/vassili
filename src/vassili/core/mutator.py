@@ -231,7 +231,7 @@ def _generate_mutants_ast(
     orig_lines = content.splitlines()
     masked_lines = masked.splitlines()
     lineas_inactivas = {
-        idx for idx, (o, m) in enumerate(zip(orig_lines, masked_lines)) if o != m
+        idx for idx, (o, m) in enumerate(zip(orig_lines, masked_lines, strict=False)) if o != m
     }
 
     source_bytes = content.encode("utf-8")

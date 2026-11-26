@@ -164,6 +164,274 @@ def _buscar(patron: Patron, linea: str) -> Optional[Tuple[int, int]]:
     return (m.start(), m.end()) if m else None
 
 
+_BINARIOS_AST: Dict[str, Tuple[int, str, str]] = {
+    "==": (0, "ROR", " != "),
+    "!=": (1, "ROR", " == "),
+    "<=": (2, "ROR", " > "),
+    ">=": (3, "ROR", " < "),
+    "<": (4, "ROR", " <= "),
+    ">": (5, "ROR", " >= "),
+    "+": (6, "AOR", " - "),
+    "-": (7, "AOR", " + "),
+    "*": (8, "AOR", " / "),
+    "&&": (11, "LCR", " || "),
+    "||": (12, "LCR", " && "),
+}
+_UNARIOS_INC_AST: Dict[str, Tuple[int, str, str]] = {
+    "++": (9, "UOI", "--"),
+    "--": (10, "UOI", "++"),
+}
+
+
+def _nombre_funcion_def(node) -> str:
+    declarator = node.child_by_field_name("declarator")
+    while declarator is not None:
+        if declarator.type == "identifier":
+            return (declarator.text or b"").decode("utf-8", errors="replace")
+        sub = declarator.child_by_field_name("declarator")
+        if sub is not None:
+            declarator = sub
+        else:
+            break
+    return ""
+
+
+def _extraer_llamada_falla(expr_node) -> Optional[str]:
+    """Devuelve el nombre de función en `FUNCIONES_QUE_FALLAN` si `expr_node` (o su cast) la llama."""
+    actual = expr_node
+    while actual is not None and actual.type in ("cast_expression", "parenthesized_expression"):
+        actual = actual.child_by_field_name("value") or next(
+            (c for c in actual.children if c.is_named and c.type != "type_descriptor"),
+            None,
+        )
+    if actual is not None and actual.type == "call_expression":
+        fn = actual.child_by_field_name("function")
+        if fn is not None and fn.type == "identifier":
+            nombre = (fn.text or b"").decode("utf-8", errors="replace")
+            if nombre in FUNCIONES_QUE_FALLAN:
+                return nombre
+    return None
+
+
+def _generate_mutants_ast(
+    content: str,
+    file_path: Path,
+    sanitizers: bool,
+    errores: bool,
+    perfil: str,
+    tope: int,
+) -> Optional[List[Tuple[Mutant, str]]]:
+    """Genera mutantes usando los rangos exactos de nodos del AST Tree-sitter."""
+    try:
+        from yutani.ts_queries import enmascarar_bloques_inactivos, parser_c
+    except ImportError:
+        return None
+
+    masked = enmascarar_bloques_inactivos(content)
+    orig_lines = content.splitlines()
+    masked_lines = masked.splitlines()
+    lineas_inactivas = {
+        idx for idx, (o, m) in enumerate(zip(orig_lines, masked_lines)) if o != m
+    }
+
+    source_bytes = content.encode("utf-8")
+    tree = parser_c().parse(source_bytes)
+    lines = orig_lines
+
+    # candidatos[(line_idx, rule_idx)] = (start_byte, end_byte, familia, replacement, funcion_ecr)
+    candidatos: Dict[Tuple[int, int], Tuple[int, int, str, str, Optional[Tuple[str, int]]]] = {}
+    asignaciones_por_fn: Dict[str, Tuple[str, int]] = {}
+
+    def _registrar(
+        line_idx: int,
+        rule_idx: int,
+        start_b: int,
+        end_b: int,
+        familia: str,
+        nuevo: str,
+        funcion_ecr: Optional[Tuple[str, int]] = None,
+    ) -> None:
+        if line_idx in lineas_inactivas:
+            return
+        clave = (line_idx, rule_idx)
+        if clave not in candidatos or start_b < candidatos[clave][0]:
+            candidatos[clave] = (start_b, end_b, familia, nuevo, funcion_ecr)
+
+    # Recorrido en pre-orden con pila explícita para respetar el orden de asignaciones
+    pila: List[Tuple[object, bool]] = [(tree.root_node, False)]
+    while pila:
+        node, en_main = pila.pop()
+        ntype = node.type  # type: ignore[attr-defined]
+        line_idx = node.start_point.row  # type: ignore[attr-defined]
+
+        if ntype == "function_definition":
+            asignaciones_por_fn = {}
+            en_main = _nombre_funcion_def(node) == "main"
+
+        if ntype in ("string_literal", "char_literal", "comment"):
+            continue
+
+        if ntype == "init_declarator":
+            decl = node.child_by_field_name("declarator")  # type: ignore[attr-defined]
+            val = node.child_by_field_name("value")  # type: ignore[attr-defined]
+            fn_falla = _extraer_llamada_falla(val)
+            if decl is not None and fn_falla:
+                # Obtener identificador del declarador (ej. `*v` -> `v`)
+                d = decl
+                while d is not None and d.type != "identifier":
+                    d = d.child_by_field_name("declarator") or next(
+                        (c for c in d.children if c.is_named), None
+                    )
+                if d is not None and d.type == "identifier":
+                    var_name = (d.text or b"").decode("utf-8", errors="replace")
+                    asignaciones_por_fn[var_name] = (fn_falla, line_idx + 1)
+
+        elif ntype == "assignment_expression":
+            left = node.child_by_field_name("left")  # type: ignore[attr-defined]
+            right = node.child_by_field_name("right")  # type: ignore[attr-defined]
+            fn_falla = _extraer_llamada_falla(right)
+            if left is not None and fn_falla:
+                var_name = (left.text or b"").decode("utf-8", errors="replace").strip()
+                asignaciones_por_fn[var_name] = (fn_falla, line_idx + 1)
+
+        if ntype == "binary_expression":
+            left = node.child_by_field_name("left")  # type: ignore[attr-defined]
+            op = node.child_by_field_name("operator")  # type: ignore[attr-defined]
+            right = node.child_by_field_name("right")  # type: ignore[attr-defined]
+            if left is not None and op is not None and right is not None:
+                op_txt = (op.text or b"").decode("utf-8", errors="replace")
+                if op_txt in _BINARIOS_AST and left.end_point.row == right.start_point.row == line_idx:
+                    rule_idx, familia, nuevo = _BINARIOS_AST[op_txt]
+                    _registrar(line_idx, rule_idx, left.end_byte, right.start_byte, familia, nuevo)
+
+        elif ntype == "update_expression":
+            op = node.child_by_field_name("operator")  # type: ignore[attr-defined]
+            if op is None:
+                op = next(
+                    (c for c in node.children if c.type in ("++", "--")),  # type: ignore[attr-defined]
+                    None,
+                )
+            if op is not None:
+                op_txt = (op.text or b"").decode("utf-8", errors="replace")
+                if op_txt in _UNARIOS_INC_AST:
+                    rule_idx, familia, nuevo = _UNARIOS_INC_AST[op_txt]
+                    _registrar(op.start_point.row, rule_idx, op.start_byte, op.end_byte, familia, nuevo)
+
+        elif ntype == "unary_expression":
+            op = node.child_by_field_name("operator")  # type: ignore[attr-defined]
+            if op is not None and (op.text or b"").decode("utf-8", errors="replace") == "!":
+                _registrar(op.start_point.row, 13, op.start_byte, op.end_byte, "LNR", "")
+
+        elif ntype == "return_statement" and not en_main:
+            hijos_valor = [
+                c for c in node.children  # type: ignore[attr-defined]
+                if c.is_named and c.type != "comment"
+            ]
+            if len(hijos_valor) == 1:
+                val = hijos_valor[0]
+                if val.type == "number_literal" or (
+                    val.type == "unary_expression"
+                    and val.child_by_field_name("operator") is not None
+                    and (val.child_by_field_name("operator").text or b"").decode() == "-"
+                    and val.child_by_field_name("argument") is not None
+                    and val.child_by_field_name("argument").type == "number_literal"
+                ):
+                    orig_ret = source_bytes[node.start_byte:val.end_byte].decode("utf-8", errors="replace")
+                    if re.fullmatch(r"return\s+-?\d+", orig_ret) and node.start_point.row == val.end_point.row:
+                        _registrar(
+                            line_idx,
+                            14,
+                            node.start_byte,
+                            val.end_byte,
+                            "RVR",
+                            _retorno_constante(orig_ret),
+                        )
+
+        elif ntype == "call_expression" and sanitizers:
+            fn = node.child_by_field_name("function")  # type: ignore[attr-defined]
+            args = node.child_by_field_name("arguments")  # type: ignore[attr-defined]
+            if fn is not None and args is not None and fn.type == "identifier":
+                fn_name = (fn.text or b"").decode("utf-8", errors="replace")
+                inner = source_bytes[args.start_byte + 1:args.end_byte - 1].decode("utf-8", errors="replace")
+                if fn_name == "malloc" and inner.strip() and args.start_point.row == args.end_point.row:
+                    _registrar(
+                        line_idx,
+                        15,
+                        args.start_byte + 1,
+                        args.end_byte - 1,
+                        "MSR",
+                        f"({inner}) - 1",
+                    )
+                elif fn_name == "free" and inner.strip() and node.start_point.row == node.end_point.row:
+                    _registrar(line_idx, 16, node.start_byte, node.end_byte, "FDR", "(void)0")
+
+        elif ntype == "if_statement" and errores:
+            cond = node.child_by_field_name("condition")  # type: ignore[attr-defined]
+            if cond is not None and cond.start_point.row == cond.end_point.row:
+                inner = source_bytes[cond.start_byte + 1:cond.end_byte - 1].decode("utf-8", errors="replace")
+                chequeo = chequeo_de_error(f"if ({inner})")
+                if chequeo is not None:
+                    fn_ecr: Optional[Tuple[str, int]] = (
+                        (chequeo["fn"], line_idx + 1)
+                        if chequeo.groupdict().get("fn")
+                        else asignaciones_por_fn.get(chequeo["var"])
+                    )
+                    if fn_ecr is not None:
+                        _registrar(
+                            line_idx,
+                            17,
+                            cond.start_byte + 1,
+                            cond.end_byte - 1,
+                            "ECR",
+                            f"({inner}) && 0",
+                            funcion_ecr=fn_ecr,
+                        )
+
+        # Apilar hijos en orden inverso para recorrer en pre-orden izquierdo-derecho
+        for hijo in reversed(node.children):  # type: ignore[attr-defined]
+            pila.append((hijo, en_main))
+
+    mutants_with_code: List[Tuple[Mutant, str]] = []
+    prioridades: Dict[int, int] = {}
+    mutant_id = 1
+
+    for (line_idx, _rule_idx) in sorted(candidatos):
+        if mutant_id > tope:
+            break
+        start_b, end_b, m_type, nuevo, funcion_ecr = candidatos[(line_idx, _rule_idx)]
+        line_str = lines[line_idx] if line_idx < len(lines) else ""
+        prioridad = prioridad_catedra(m_type, line_str) if perfil == "catedra" else 0
+        if prioridad is None:
+            continue
+
+        mutated_bytes = source_bytes[:start_b] + nuevo.encode("utf-8") + source_bytes[end_b:]
+        mutated_code = mutated_bytes.decode("utf-8", errors="replace")
+        mutated_lines = mutated_code.splitlines()
+        mutated_line = mutated_lines[line_idx] if line_idx < len(mutated_lines) else ""
+
+        m = Mutant(
+            id=mutant_id,
+            file_path=str(file_path),
+            line_number=line_idx + 1,
+            original_snippet=line_str.strip(),
+            mutated_snippet=mutated_line.strip(),
+            mutation_type=m_type,
+            status=MutationStatus.SURVIVED,
+            funcion=funcion_ecr[0] if funcion_ecr else None,
+            linea_llamada=funcion_ecr[1] if funcion_ecr else None,
+        )
+        mutants_with_code.append((m, mutated_code))
+        prioridades[m.id] = prioridad
+        mutant_id += 1
+
+    if perfil == "catedra":
+        mutants_with_code.sort(key=lambda par: (prioridades[par[0].id], par[0].id))
+        mutants_with_code = mutants_with_code[:MAX_MUTANTES]
+        for nuevo_id, (m, _) in enumerate(mutants_with_code, 1):
+            m.id = nuevo_id
+    return mutants_with_code
+
+
 def generate_mutants_for_file(file_path: Path, sanitizers: bool = False,
                               errores: bool = False, perfil: str = "completo") -> List[Tuple[Mutant, str]]:
     """Genera lista de mutantes y el código fuente C completo de cada mutante."""
@@ -171,9 +439,14 @@ def generate_mutants_for_file(file_path: Path, sanitizers: bool = False,
         raise ValueError(f"perfil desconocido: {perfil} (usá {' o '.join(PERFILES)})")
     # Con `catedra` se generan todos los candidatos, se ordenan por prioridad y recién ahí se corta.
     tope = MAX_MUTANTES if perfil == "completo" else MAX_MUTANTES * 20
+    content = file_path.read_text(encoding="utf-8", errors="replace")
+
+    ast_mutants = _generate_mutants_ast(content, file_path, sanitizers, errores, perfil, tope)
+    if ast_mutants is not None:
+        return ast_mutants
+
     prioridades: Dict[int, int] = {}
     mutants_with_code: List[Tuple[Mutant, str]] = []
-    content = file_path.read_text(encoding="utf-8", errors="replace")
     lines = content.splitlines()
     # Se busca el operador en una copia con los comentarios y literales
     # blanqueados (mismas posiciones y líneas) y se aplica el reemplazo sobre la

@@ -130,8 +130,9 @@ def _compilar(fuente: Path, binario: Path, sanitizers: bool = False, suite: Opti
     daed_ok = _compilar_con_daedalus(fuentes, binario, flags)
     if daed_ok is not None:
         return daed_ok
+    compilador = [shutil.which("ccache"), "gcc"] if shutil.which("ccache") else ["gcc"]
     comp = subprocess.run(
-        ["gcc", *flags, *map(str, fuentes), "-o", str(binario), "-lm"],
+        [*compilador, *flags, *map(str, fuentes), "-o", str(binario), "-lm"],
         capture_output=True,
         check=False,
     )

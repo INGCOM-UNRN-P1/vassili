@@ -2,7 +2,7 @@
 
 import re
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from vassili.core.masking import enmascarar_comentarios_y_literales
 from vassili.core.models import Mutant, MutationStatus
 
@@ -258,7 +258,7 @@ def _generate_mutants_ast(
             candidatos[clave] = (start_b, end_b, familia, nuevo, funcion_ecr)
 
     # Recorrido en pre-orden con pila explícita para respetar el orden de asignaciones
-    pila: List[Tuple[object, bool]] = [(tree.root_node, False)]
+    pila: List[Tuple[Any, bool]] = [(tree.root_node, False)]
     while pila:
         node, en_main = pila.pop()
         ntype = node.type  # type: ignore[attr-defined]
